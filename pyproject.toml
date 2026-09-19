@@ -1,0 +1,34 @@
+[project]
+name = "clique"
+version = "0.0.1"
+description = "Locally shared AI models over LAN: every node is a dev environment and a model provider (spec-only scaffold)"
+requires-python = ">=3.12"
+dependencies = [
+    "pydantic>=2",
+    "fastapi",
+    "uvicorn",
+    "httpx",
+    "websockets",
+    "zeroconf",
+    "psutil",
+    "huggingface_hub",
+    "dulwich",
+    "apscheduler",
+    "croniter",
+    "typer",
+    "rich",
+    "textual",
+    "pynacl",
+]
+
+[project.optional-dependencies]
+nvidia = ["nvidia-ml-py"]
+dev = ["pytest", "pytest-asyncio", "ruff"]
+
+[project.scripts]
+clique = "client.cli:main"
+clique-agent = "node.agent:main"
+clique-server = "scheduler.server:main"
+
+[tool.uv]
+# managed with uv (matches ARCHITECTURE.MD worker-agent tooling choice)
