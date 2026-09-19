@@ -20,15 +20,38 @@ done
 [ -n "$PY" ] || { echo "error: python 3.11+ required"; exit 1; }
 echo "using $($PY --version)"
 
+# headless-safe: never prompt for credentials (fail fast instead of hanging
+# with no tty, e.g. ssh < /dev/null or systemd unit).
+export GIT_TERMINAL_PROMPT=0
+export GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new}"
+
+command -v git >/dev/null 2>&1 || {
+    echo "error: git not found. install it first:"
+    echo "  arch:  sudo pacman -S --needed git python"
+    echo "  mac:   xcode-select --install"
+    exit 1
+}
+
 # get source: use cwd if it is a clone, else clone/pull
 if [ -f "pyproject.toml" ] && grep -q '^name = "clique"' pyproject.toml 2>/dev/null; then
     SRC_DIR="$(pwd)"
 else
     if [ -d "$INSTALL_DIR/.git" ]; then
-        git -C "$INSTALL_DIR" pull --ff-only
+        if ! git -C "$INSTALL_DIR" pull --ff-only; then
+            echo "error: 'git pull --ff-only' failed in $INSTALL_DIR"
+            echo "fix with: git -C \"$INSTALL_DIR\" fetch origin && git -C \"$INSTALL_DIR\" reset --hard origin/main"
+            exit 1
+        fi
+    elif [ -e "$INSTALL_DIR" ]; then
+        echo "error: $INSTALL_DIR exists but is not a git clone; move it aside and retry"
+        exit 1
     else
         mkdir -p "$(dirname "$INSTALL_DIR")"
-        git clone --depth 1 "$REPO_URL" "$INSTALL_DIR"
+        if ! git clone --depth 1 "$REPO_URL" "$INSTALL_DIR" < /dev/null; then
+            echo "error: git clone failed (network? private repo? proxy?)"
+            echo "retry with: GIT_CURL_VERBOSE=1 git clone \"$REPO_URL\" \"$INSTALL_DIR\""
+            exit 1
+        fi
     fi
     SRC_DIR="$INSTALL_DIR"
 fi
