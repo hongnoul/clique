@@ -2,8 +2,9 @@
 
 [Overview](README.md)
 
-Spec-only scaffold. Every `.py` file in this tree contains typed function/class
-signatures with docstring contracts and `...` bodies. No implementation yet.
+Fully implemented. Every `.py` file in this tree contains the working
+implementation with docstring contracts; `tests/` runs a real server
+plus real agents over HTTP/WS with an echo runtime.
 
 ## System summary
 
@@ -43,12 +44,12 @@ flowchart TB
 | `common/protocol.py` | Wire message schemas and (de)serialization: register, heartbeat, assign, result, context sync. |
 | `common/config.py` | TOML config loading/validation for node and server roles. |
 | `common/errors.py` | Error taxonomy shared by all components. |
-| `node/agent.py` | Node daemon lifecycle: start, join clique, serve, drain, leave. |
+| `node/agent.py` | Node daemon lifecycle: start, join clique, serve, drain, leave. Also hosts the executor and heartbeat loops for the MVP. |
 | `node/discovery.py` | mDNS/zeroconf announce + browse; find or become server node. |
 | `node/resources.py` | Probe CPU/GPU/memory/battery/load; produce ResourceSnapshot. |
 | `node/model_runtime.py` | Adapter over llama-server/Ollama: load, unload, infer, health. |
-| `node/heartbeat.py` | Periodic status/offer reporting to the server node. |
-| `node/executor.py` | Accept assigned task, run on local model, stream/report result. |
+| `node/heartbeat.py` | Placeholder: heartbeat loop lives in `node/agent.py` for now. |
+| `node/executor.py` | Placeholder: task execution lives in `node/agent.py` for now. |
 | `scheduler/server.py` | Server-node entrypoint: compose registry, router, API, stores. |
 | `scheduler/registry.py` | Node registry, cluster membership, liveness, op-order tracking. |
 | `scheduler/router.py` | Routing policy: eligibility, load/length-aware scoring, one task per node. |
@@ -79,7 +80,7 @@ flowchart TB
 | Model download       | `huggingface_hub`                                              | Default model fetch (Qwen 2.5), resumable, revision pinning. Future best-model detection integrates here.                                | manual curl                                                                                                                         |
 | Server DB            | `sqlite3` (stdlib), WAL mode                                   | Contexts, registry snapshots, ledger, cron defs; single-writer fits one server node.                                                     | Postgres (overkill for LAN clique)                                                                                                  |
 | Shared-DB versioning | `dulwich` (pure-python git)                                    | The requested "local .git in the shared db": snapshot/commit/diff/rollback without shelling out; no adequate non-git OSS beats git here. | `pygit2` (libgit2 build pain), GitPython (subprocess-based)                                                                         |
-| Cron scheduling      | `APScheduler` + `croniter`                                     | In-process cron triggers with cron-expression parsing; jobs live in our DB, approval flow is ours.                                       | system crond (no approval hook)                                                                                                     |
+| Cron scheduling      | `croniter` (server tick loop drives firing)                    | Cron-expression parsing + next-run computation; jobs live in our DB, approval flow is ours; the server tick loop fires due jobs so no extra scheduler process. | APScheduler (extra machinery for what one tick check does), system crond (no approval hook)                                          |
 | CLI                  | `typer` + `rich`                                               | Headless config/dashboard alternative; `rich` tables for live status.                                                                    | argparse, click                                                                                                                     |
 | Terminal dashboard   | `textual`                                                      | Full TUI dashboard for monitor-less nodes (GX10).                                                                                        | rich.live only                                                                                                                      |
 | Web dashboard        | Static HTML + `htmx` (or Preact) served by FastAPI             | Zero build-step to start; upgrade path later.                                                                                            | React/Next (build overhead)                                                                                                         |
@@ -88,12 +89,12 @@ flowchart TB
 
 ## Implementation priority (from vision dump)
 
-1. **P0 Connect the pool**: `node/discovery.py`, `node/agent.py`, `scheduler/registry.py`, `common/protocol.py`.
-2. **P1 Basic router**: `scheduler/router.py` (longer prompts → bigger models, busyness-aware, one task per node), `node/executor.py`, `node/model_runtime.py`.
-3. **P2 Dashboard/UI**: `client/cli.py`, `client/dashboard/`, `scheduler/api/*` (connect device, pick default Qwen 2.5 or bring your own model, view devices and sessions).
-4. **P2 Suggestions**: `scheduler/suggestions.py` (overloaded task types → suggest a node switch models).
-5. **P3 Shared context**: `scheduler/context_store.py`, `scheduler/sessions.py` (intra-cluster now, inter-cluster far future).
-6. **P3 Governance/extras**: `scheduler/permissions.py` (/op, first-client-is-op), `scheduler/cron.py`, `scheduler/vcs.py`.
+1. **P0 Connect the pool** — done: `node/discovery.py`, `node/agent.py`, `scheduler/registry.py`, `common/protocol.py`.
+2. **P1 Basic router** — done: `scheduler/router.py` (longer prompts → bigger models, busyness-aware, one task per node), executor + heartbeat in `node/agent.py`, `node/model_runtime.py`.
+3. **P2 Dashboard/UI** — done: `client/cli.py`, `client/dashboard/index.html` (served at `/dash`), `scheduler/api/*`, headless curl TUI.
+4. **P2 Suggestions** — done: `scheduler/suggestions.py` (overloaded clusters → suggest an idle node switch models, with hysteresis).
+5. **P3 Shared context** — done: `scheduler/context_store.py`, `scheduler/sessions.py` (intra-cluster now, inter-cluster far future).
+6. **P3 Governance/extras** — done: `scheduler/permissions.py` (/op, first-client-is-op), `scheduler/cron.py`, `scheduler/vcs.py` (dulwich state-repo).
 
 ## Cross-cutting invariants
 

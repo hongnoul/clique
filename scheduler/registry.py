@@ -172,3 +172,11 @@ class Registry:
 
     def remove(self, node_id: str) -> None:
         self.set_status(node_id, NodeStatus.OFFLINE, current_task_id=None)
+
+    def set_op_level(self, node_id: str, level: OpLevel) -> NodeInfo | None:
+        info = self.get(node_id)
+        if info is None:
+            return None
+        info.op_level = level
+        self._save(info)
+        return info

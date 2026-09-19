@@ -1,4 +1,4 @@
-"""Server node (MVP implementation).
+"""Server node (full implementation).
 
 FastAPI app exposing:
 - POST /v1/register           signed node registration -> token
@@ -8,9 +8,13 @@ FastAPI app exposing:
 - POST /v1/tasks/{id}/cancel
 - GET  /v1/tasks              list
 - GET  /v1/nodes, /v1/clusters, /v1/clique, /v1/stats
+- extended surface (scheduler/api/rest.py): sessions, permissions,
+  cron, suggestions, vcs, kick, /v1/chat/completions, /dash
+- WS firehose (scheduler/api/ws.py): /ws/events, /ws/sessions/{id}
 
 A background loop schedules queued tasks onto ready agent connections,
-expires leases, and marks stale nodes offline.
+expires leases, marks stale nodes offline, fires approved cron jobs,
+runs suggestion analysis, and takes periodic vcs snapshots.
 """
 
 from __future__ import annotations
@@ -37,8 +41,16 @@ from common.types import (
     node_id_from_public_key,
     utcnow,
 )
+from scheduler.api.rest import register_extended_routes
+from scheduler.api.ws import EventBroadcaster, register_ws_routes
+from scheduler.context_store import ContextStore
+from scheduler.cron import CronService
+from scheduler.permissions import PermissionManager
 from scheduler.registry import Registry
 from scheduler.router import Router
+from scheduler.sessions import SessionManager
+from scheduler.suggestions import SuggestionEngine
+from scheduler.vcs import VcsService
 
 log = logging.getLogger("clique.server")
 
@@ -77,7 +89,55 @@ class SchedulerServer:
         self.tokens: dict[str, str] = {}  # token -> node_id
         self.progress: dict[str, str] = {}  # task_id -> accumulated text
         self._tick_task: asyncio.Task | None = None
+
+        # extended subsystems (P2/P3)
+        db = config.server.db_path
+        self.events = EventBroadcaster()
+        self.permissions = PermissionManager(
+            db, self.registry, policy=config.server.permission_policy)
+        self.contexts = ContextStore(db)
+        self.sessions = SessionManager(db, self.contexts, self.registry)
+        self.cron = CronService(db, self.router, self.permissions)
+        self.suggestions = SuggestionEngine(self.registry, self.router)
+        self.vcs = VcsService(config.node.data_dir / "state-repo")
+        self.vcs.register("permissions.json", self.permissions.export_state)
+        self.vcs.register("cron.json", self.cron.export_state)
+        self.vcs.register("sessions.json", self.sessions.export_state)
+        self.vcs.register("nodes.json", self._export_nodes)
+        self.vcs.init()
+        self.permissions.on_change(
+            lambda action, actor, target: self.vcs.snapshot(
+                f"{action} {target or ''} by {actor[:8]}", actor))
+
         self.app = self._build_app()
+
+    def _export_nodes(self) -> str:
+        import json
+        return json.dumps(
+            [{"node_id": n.node_id, "display_name": n.display_name,
+              "role": n.role.value, "op_level": n.op_level.value,
+              "model": n.model.cluster_key() if n.model else None}
+             for n in self.registry.list_nodes()], indent=2, sort_keys=True)
+
+    async def submit_task(self, request: TaskRequest) -> str:
+        """Submit + immediate scheduling; shared by REST routes."""
+        if request.session_id:
+            try:
+                session = self.sessions.get(request.session_id)
+            except KeyError:
+                raise HTTPException(404, "no such session")
+            version = self.contexts.latest_version(request.session_id)
+            self.sessions.append_turn(
+                request.session_id, version, "user", request.prompt)
+            if not request.model_hint and session.cluster_key:
+                request.model_hint = session.cluster_key
+        try:
+            task_id = self.router.submit(request)
+        except OverflowError as e:
+            raise HTTPException(429, str(e)) from e
+        await self.events.publish("task.submitted", {"task_id": task_id})
+        await self._schedule_now()
+        return task_id
 
     # ------------------------------------------------------------------ app
 
@@ -114,6 +174,9 @@ class SchedulerServer:
             )
             token = secrets.token_urlsafe(24)
             self.tokens[token] = node_id
+            await self.events.publish("node.joined", {
+                "node_id": node_id, "display_name": body["display_name"],
+                "op_level": info.op_level.value})
             return {"node_id": node_id, "token": token,
                     "op_level": info.op_level.value,
                     "default_model": self.config.server.default_model}
@@ -138,12 +201,7 @@ class SchedulerServer:
         @app.post("/v1/tasks")
         async def submit(body: dict) -> dict:
             request = TaskRequest.model_validate(body)
-            try:
-                task_id = self.router.submit(request)
-            except OverflowError as e:
-                raise HTTPException(429, str(e)) from e
-            await self._schedule_now()
-            return {"task_id": task_id}
+            return {"task_id": await self.submit_task(request)}
 
         @app.get("/v1/tasks/{task_id}")
         async def get_task(task_id: str) -> dict:
@@ -184,8 +242,8 @@ class SchedulerServer:
         @app.get("/v1/clique")
         async def clique() -> dict:
             return {"name": self.config.server.clique_name,
-                    "policy": self.config.server.permission_policy,
-                    "default_model": self.config.server.default_model}
+                    "default_model": self.config.server.default_model,
+                    "policy": self.permissions.policy}
 
         @app.get("/v1/stats")
         async def stats() -> dict:
@@ -294,6 +352,8 @@ class SchedulerServer:
             )
             return header + body + footer
 
+        register_extended_routes(app, self)
+        register_ws_routes(app, self)
         return app
 
     # ------------------------------------------------------------- agent msgs
@@ -314,6 +374,12 @@ class SchedulerServer:
             tid = msg["task_id"]
             self.progress[tid] = self.progress.get(tid, "") + msg["text_delta"]
             self.router.mark_running(tid, msg["attempt_id"])
+            view = self.router.get_task(tid)
+            if view and view.request.session_id:
+                await self.events.publish(
+                    "session.delta",
+                    {"task_id": tid, "delta": msg["text_delta"]},
+                    topic=f"session:{view.request.session_id}")
         elif mtype == protocol.RESULT:
             result = TaskResult.model_validate(msg["result"])
             try:
@@ -323,12 +389,27 @@ class SchedulerServer:
                 committed = False
             if committed:
                 self.progress.pop(result.task_id, None)
+                view = self.router.get_task(result.task_id)
+                sid = view.request.session_id if view else None
+                if sid and result.state == TaskState.SUCCEEDED and result.output:
+                    version = self.contexts.latest_version(sid)
+                    self.sessions.append_turn(
+                        sid, version, "assistant", result.output)
+                    self.sessions.pin(sid, node_id)
+                    await self.events.publish(
+                        "session.turn", {"session_id": sid,
+                                         "task_id": result.task_id},
+                        topic=f"session:{sid}")
+                await self.events.publish("task.finished", {
+                    "task_id": result.task_id, "state": result.state.value,
+                    "node_id": node_id})
             self.registry.set_status(node_id, NodeStatus.READY, current_task_id=None)
             await self._schedule_now()
         elif mtype == protocol.LEAVE:
             self.registry.remove(node_id)
             for tid in self.router.on_node_lost(node_id):
                 log.info("requeued %s after %s left", tid, node_id)
+            await self.events.publish("node.left", {"node_id": node_id})
             await self._schedule_now()
 
     # ---------------------------------------------------------------- loops
@@ -343,6 +424,9 @@ class SchedulerServer:
             self.registry.set_status(
                 assignment.node_id, NodeStatus.BUSY,
                 current_task_id=assignment.task_id)
+            await self.events.publish("task.assigned", {
+                "task_id": assignment.task_id, "node_id": assignment.node_id,
+                "reason": assignment.reason})
             try:
                 await ws.send_text(protocol.dumps(
                     protocol.msg_assign(assignment, request)))
@@ -354,6 +438,9 @@ class SchedulerServer:
     async def _tick_loop(self) -> None:
         hb = self.config.node.heartbeat_interval_s
         offline_after = timedelta(seconds=hb * self.config.server.heartbeat_offline_after)
+        snapshot_every = 30.0  # seconds between periodic vcs snapshots
+        last_snapshot = 0.0
+        import time as _time
         while True:
             await asyncio.sleep(hb)
             try:
@@ -361,7 +448,21 @@ class SchedulerServer:
                     log.info("node %s offline (stale heartbeat)", info.node_id)
                     for tid in self.router.on_node_lost(info.node_id):
                         log.info("requeued %s", tid)
+                    await self.events.publish(
+                        "node.offline", {"node_id": info.node_id})
                 self.router.expire_leases()
+                for task_id in self.cron.due():
+                    log.info("cron fired task %s", task_id)
+                    await self.events.publish(
+                        "cron.fired", {"task_id": task_id})
+                for s in self.suggestions.analyze():
+                    await self.events.publish("suggestion.new", s.to_dict())
+                await self.events.publish(
+                    "stats.tick", self.router.queue_stats())
+                now = _time.monotonic()
+                if now - last_snapshot > snapshot_every:
+                    last_snapshot = now
+                    self.vcs.snapshot("periodic state snapshot", "server")
                 await self._schedule_now()
             except Exception:
                 log.exception("tick failed")

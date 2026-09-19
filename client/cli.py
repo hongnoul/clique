@@ -188,6 +188,170 @@ def stats(server: str = typer.Option(None)) -> None:
     asyncio.run(run())
 
 
+def _authed(server: str | None) -> CliqueClient:
+    """Client with a node token (registers this device's keypair)."""
+    client = _resolve(server)
+    asyncio.run(client.authenticate())
+    return client
+
+
+@app.command()
+def sessions(server: str = typer.Option(None),
+             create: bool = typer.Option(False, "--create"),
+             cluster: str = typer.Option("", "--cluster"),
+             show: str = typer.Option(None, "--show", help="session id"),
+             migrate: str = typer.Option(None, "--migrate", help="session id"),
+             to_node: str = typer.Option(None, "--to-node"),
+             close: str = typer.Option(None, "--close", help="session id")) -> None:
+    """List, create, inspect, migrate, or close sessions."""
+    client = _authed(server)
+
+    async def run() -> None:
+        if create:
+            console.print(await client.create_session(cluster))
+        elif show:
+            console.print(await client.session(show))
+        elif migrate:
+            if not to_node:
+                raise typer.BadParameter("--migrate needs --to-node")
+            console.print(await client.migrate_session(migrate, to_node))
+        elif close:
+            console.print(await client.close_session(close))
+        else:
+            table = Table(title="active sessions")
+            for col in ("id", "cluster", "pinned", "version", "owner"):
+                table.add_column(col)
+            for s in await client.sessions():
+                table.add_row(s["session_id"], s["cluster_key"] or "-",
+                              (s["pinned_node"] or "-")[:8],
+                              str(s["context_version"]),
+                              s["owner_node"][:8])
+            console.print(table)
+
+    asyncio.run(run())
+
+
+@app.command()
+def op(target: str = typer.Argument(None, help="node id to op"),
+       deop: str = typer.Option(None, "--deop", help="node id to deop"),
+       policy: str = typer.Option(None, "--policy",
+                                  help="first-client-op | open | democracy"),
+       audit: bool = typer.Option(False, "--audit"),
+       server: str = typer.Option(None)) -> None:
+    """Permission control: /op, /deop, policy, audit, or list levels."""
+    client = _authed(server)
+
+    async def run() -> None:
+        if target:
+            console.print(await client.op(target))
+        elif deop:
+            console.print(await client.deop(deop))
+        elif policy:
+            console.print(await client.set_policy(policy))
+        elif audit:
+            for e in await client.audit():
+                console.print(e)
+        else:
+            table = Table(title="permissions")
+            for col in ("name", "id", "level"):
+                table.add_column(col)
+            for p in await client.permissions():
+                table.add_row(p["display_name"], p["node_id"][:8], p["level"])
+            console.print(table)
+
+    asyncio.run(run())
+
+
+@app.command()
+def kick(node_id: str, server: str = typer.Option(None)) -> None:
+    """Op: remove a node from the clique."""
+    client = _authed(server)
+    asyncio.run(client.kick(node_id))
+    console.print(f"kicked {node_id}")
+
+
+@app.command()
+def cron(expr: str = typer.Option(None, "--request",
+                                  help="cron expression, e.g. '0 * * * *'"),
+         prompt: str = typer.Option(None, "--prompt"),
+         approve: str = typer.Option(None, "--approve", help="cron id"),
+         reject: str = typer.Option(None, "--reject", help="cron id"),
+         disable: str = typer.Option(None, "--disable", help="cron id"),
+         server: str = typer.Option(None)) -> None:
+    """Cron jobs: request (any node), approve/reject (op), disable, list."""
+    client = _authed(server)
+
+    async def run() -> None:
+        if expr:
+            if not prompt:
+                raise typer.BadParameter("--request needs --prompt")
+            console.print(await client.cron_request(expr, prompt))
+        elif approve:
+            console.print(await client.cron_approve(approve))
+        elif reject:
+            console.print(await client.cron_reject(reject))
+        elif disable:
+            console.print(await client.cron_disable(disable))
+        else:
+            table = Table(title="cron jobs")
+            for col in ("id", "expr", "requested by", "status", "last run"):
+                table.add_column(col)
+            for c in await client.cron_list():
+                status = ("enabled" if c["enabled"]
+                          else "disabled" if c["approved_by"] else "pending")
+                table.add_row(c["cron_id"], c["cron_expr"],
+                              c["requested_by"][:8], status,
+                              c["last_run_at"] or "-")
+            console.print(table)
+
+    asyncio.run(run())
+
+
+@app.command()
+def suggestions(dismiss: str = typer.Option(None, "--dismiss"),
+                server: str = typer.Option(None)) -> None:
+    """View or dismiss model-change suggestions."""
+    client = _authed(server)
+
+    async def run() -> None:
+        if dismiss:
+            console.print(await client.dismiss_suggestion(dismiss))
+            return
+        items = await client.suggestions()
+        if not items:
+            console.print("[dim]no active suggestions[/]")
+        for s in items:
+            console.print(f"[bold]{s['suggestion_id']}[/] {s['rationale']}"
+                          f"\n  [dim]{s['expected_effect']}[/]")
+
+    asyncio.run(run())
+
+
+@app.command()
+def vcs(diff: str = typer.Option(None, "--diff", help="shaA..shaB"),
+        rollback: str = typer.Option(None, "--rollback", help="sha"),
+        server: str = typer.Option(None)) -> None:
+    """State snapshot history, diff, and op-gated rollback."""
+    client = _authed(server)
+
+    async def run() -> None:
+        if diff:
+            a, _, b = diff.partition("..")
+            console.print(await client.vcs_diff(a, b))
+        elif rollback:
+            console.print(await client.vcs_rollback(rollback))
+        else:
+            table = Table(title="state snapshots")
+            for col in ("sha", "message", "actor", "at"):
+                table.add_column(col)
+            for c in await client.vcs_history():
+                table.add_row(c["sha"][:10], c["message"], c["actor"],
+                              c["timestamp"])
+            console.print(table)
+
+    asyncio.run(run())
+
+
 def main() -> None:
     app()
 

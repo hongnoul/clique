@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>clique dashboard</title>
+<style>
+  :root { color-scheme: dark; }
+  body { font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+         background: #0d1117; color: #c9d1d9; margin: 0; padding: 1rem; }
+  h1 { font-size: 1.1rem; } h2 { font-size: .95rem; color: #58a6ff; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+          gap: 1rem; }
+  .card { background: #161b22; border: 1px solid #30363d; border-radius: 8px;
+          padding: .8rem 1rem; }
+  table { border-collapse: collapse; width: 100%; font-size: .8rem; }
+  th, td { text-align: left; padding: .25rem .5rem; border-bottom: 1px solid #21262d; }
+  .badge { padding: 0 .4em; border-radius: 4px; font-size: .75rem; }
+  .ready { background: #1f6f3f; } .busy { background: #9e6a03; }
+  .offline { background: #6e1f1f; } .joining { background: #30363d; }
+  .op { color: #d2a8ff; } .owner { color: #ffa657; }
+  .sugg { border-left: 3px solid #d29922; padding-left: .6rem; margin: .4rem 0; }
+  #events { max-height: 14rem; overflow-y: auto; font-size: .72rem; color: #8b949e; }
+  .muted { color: #8b949e; }
+</style>
+</head>
+<body>
+<h1>clique <span id="cliqueName" class="muted"></span></h1>
+<div class="grid">
+  <div class="card"><h2>Devices</h2><div id="nodes"></div></div>
+  <div class="card"><h2>Queue</h2><div id="tasks"></div></div>
+  <div class="card"><h2>Sessions</h2><div id="sessions"></div></div>
+  <div class="card"><h2>Suggestions</h2><div id="suggestions"></div></div>
+  <div class="card"><h2>Governance</h2><div id="permissions"></div>
+    <h2>Cron</h2><div id="cron"></div></div>
+  <div class="card"><h2>Snapshots</h2><div id="vcs"></div></div>
+  <div class="card" style="grid-column: 1 / -1"><h2>Live events</h2>
+    <div id="events"></div></div>
+</div>
+<script>
+const $ = (id) => document.getElementById(id);
+const j = async (p) => (await fetch(p)).json();
+
+function badge(s) { return `<span class="badge ${s}">${s}</span>`; }
+
+async function refresh() {
+  try {
+    const [clique, nodes, tasks, sessions, suggestions, perms, cron, vcs] =
+      await Promise.all([
+        j('/v1/clique'), j('/v1/nodes'), j('/v1/tasks'), j('/v1/sessions'),
+        j('/v1/suggestions'), j('/v1/permissions'), j('/v1/cron'),
+        j('/v1/vcs/history?limit=10')]);
+    $('cliqueName').textContent = `· ${clique.name} · policy ${clique.policy}`;
+    $('nodes').innerHTML = '<table><tr><th>name</th><th>status</th><th>op</th>'
+      + '<th>model</th><th>task</th></tr>'
+      + nodes.map(n => `<tr><td>${n.display_name}</td><td>${badge(n.status)}</td>`
+        + `<td class="${n.op_level}">${n.op_level}</td>`
+        + `<td>${n.model ? n.model.family + ' ' + n.model.parameter_count_b + 'B' : '-'}</td>`
+        + `<td>${n.current_task_id ? n.current_task_id.slice(0,10) : '-'}</td></tr>`)
+        .join('') + '</table>';
+    $('tasks').innerHTML = '<table><tr><th>id</th><th>state</th><th>node</th>'
+      + '<th>type</th></tr>'
+      + tasks.slice(0, 12).map(t => `<tr><td>${t.request.task_id.slice(0,10)}</td>`
+        + `<td>${t.state}</td><td>${t.assigned_node ? t.assigned_node.slice(0,8) : '-'}</td>`
+        + `<td>${t.request.task_type}</td></tr>`).join('') + '</table>';
+    $('sessions').innerHTML = sessions.length
+      ? '<table><tr><th>id</th><th>cluster</th><th>pinned</th><th>v</th></tr>'
+        + sessions.map(s => `<tr><td>${s.session_id}</td><td>${s.cluster_key || '-'}</td>`
+          + `<td>${s.pinned_node ? s.pinned_node.slice(0,8) : '-'}</td>`
+          + `<td>${s.context_version}</td></tr>`).join('') + '</table>'
+      : '<span class="muted">none active</span>';
+    $('suggestions').innerHTML = suggestions.length
+      ? suggestions.map(s => `<div class="sugg">${s.rationale}<br>`
+        + `<span class="muted">${s.expected_effect}</span></div>`).join('')
+      : '<span class="muted">none</span>';
+    $('permissions').innerHTML = '<table>'
+      + perms.map(p => `<tr><td>${p.display_name}</td>`
+        + `<td class="${p.level}">${p.level}</td></tr>`).join('') + '</table>';
+    $('cron').innerHTML = cron.length
+      ? '<table>' + cron.map(c => `<tr><td>${c.cron_id}</td><td>${c.cron_expr}</td>`
+        + `<td>${c.enabled ? 'enabled' : (c.approved_by ? 'disabled' : 'pending')}</td></tr>`)
+        .join('') + '</table>'
+      : '<span class="muted">no jobs</span>';
+    $('vcs').innerHTML = '<table>'
+      + vcs.map(c => `<tr><td>${c.sha.slice(0,10)}</td><td>${c.message}</td>`
+        + `<td class="muted">${c.actor}</td></tr>`).join('') + '</table>';
+  } catch (e) { console.error(e); }
+}
+
+function connectEvents() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  const ws = new WebSocket(`${proto}://${location.host}/ws/events`);
+  ws.onmessage = (m) => {
+    const { event, payload } = JSON.parse(m.data);
+    if (event === 'stats.tick') return;
+    const div = document.createElement('div');
+    div.textContent = `${new Date().toLocaleTimeString()} ${event} ${JSON.stringify(payload)}`;
+    $('events').prepend(div);
+    while ($('events').children.length > 100) $('events').lastChild.remove();
+    refresh();
+  };
+  ws.onclose = () => setTimeout(connectEvents, 2000);
+}
+
+refresh();
+setInterval(refresh, 5000);
+connectEvents();
+</script>
+</body>
+</html>

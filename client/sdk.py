@@ -1,9 +1,10 @@
-"""Python SDK for the server node API (MVP implementation)."""
+"""Python SDK for the server node API (full implementation)."""
 
 from __future__ import annotations
 
 import asyncio
 import uuid
+from pathlib import Path
 
 import httpx
 
@@ -11,9 +12,12 @@ from common.types import Cluster, NodeInfo, TaskRequest, TaskState, TaskView
 
 
 class CliqueClient:
-    def __init__(self, base_url: str, timeout_s: float = 30.0) -> None:
+    def __init__(self, base_url: str, timeout_s: float = 30.0,
+                 token: str | None = None) -> None:
         self.base_url = base_url.rstrip("/")
         self._timeout = timeout_s
+        self.token = token
+        self.node_id: str | None = None
 
     @classmethod
     async def discover(cls, timeout_s: float = 5.0) -> "CliqueClient":
@@ -25,23 +29,53 @@ class CliqueClient:
 
     async def _get(self, path: str, **params) -> dict | list:
         async with httpx.AsyncClient(timeout=self._timeout) as c:
-            r = await c.get(f"{self.base_url}{path}", params=params or None)
+            r = await c.get(f"{self.base_url}{path}", params=params or None,
+                            headers=self._headers())
             r.raise_for_status()
             return r.json()
 
     async def _post(self, path: str, body: dict | None = None) -> dict:
         async with httpx.AsyncClient(timeout=self._timeout) as c:
-            r = await c.post(f"{self.base_url}{path}", json=body)
+            r = await c.post(f"{self.base_url}{path}", json=body,
+                             headers=self._headers())
             r.raise_for_status()
             return r.json()
+
+    async def _delete(self, path: str) -> dict:
+        async with httpx.AsyncClient(timeout=self._timeout) as c:
+            r = await c.delete(f"{self.base_url}{path}",
+                               headers=self._headers())
+            r.raise_for_status()
+            return r.json()
+
+    def _headers(self) -> dict:
+        return {"Authorization": f"Bearer {self.token}"} if self.token else {}
+
+    async def authenticate(self, data_dir: Path | None = None) -> str:
+        """Register this device's keypair with the server to obtain a node
+        token (required for op-gated routes). Reuses the agent identity
+        when one exists in data_dir."""
+        from common import protocol
+        from common.config import DEFAULT_DIR, generate_or_load_keypair
+        import socket
+        pub, seed = generate_or_load_keypair(data_dir or DEFAULT_DIR)
+        name = socket.gethostname().split(".")[0]
+        body = {"display_name": name, "public_key": pub,
+                "signature": protocol.sign_payload(name.encode(), seed),
+                "role": "client"}
+        data = await self._post("/v1/register", body)
+        self.token = data["token"]
+        self.node_id = data["node_id"]
+        return self.token
 
     # -- tasks ---------------------------------------------------------------
 
     async def submit(self, prompt: str, *, task_type: str = "chat",
                      model_hint: str | None = None,
+                     session_id: str | None = None,
                      max_output_tokens: int = 1024) -> str:
         request = TaskRequest(
-            prompt=prompt, model_hint=model_hint,
+            prompt=prompt, model_hint=model_hint, session_id=session_id,
             max_output_tokens=max_output_tokens,
             idempotency_key=uuid.uuid4().hex,
         )
@@ -81,3 +115,79 @@ class CliqueClient:
 
     async def stats(self) -> dict:
         return await self._get("/v1/stats")  # type: ignore[return-value]
+
+    # -- sessions --------------------------------------------------------------
+
+    async def create_session(self, cluster_key: str = "") -> dict:
+        return await self._post("/v1/sessions", {"cluster_key": cluster_key})
+
+    async def sessions(self) -> list[dict]:
+        return await self._get("/v1/sessions")  # type: ignore[return-value]
+
+    async def session(self, session_id: str) -> dict:
+        return await self._get(f"/v1/sessions/{session_id}")
+
+    async def migrate_session(self, session_id: str, to_node: str,
+                              reason: str = "") -> dict:
+        return await self._post(f"/v1/sessions/{session_id}/migrate",
+                                {"to_node": to_node, "reason": reason})
+
+    async def close_session(self, session_id: str) -> dict:
+        return await self._delete(f"/v1/sessions/{session_id}")
+
+    # -- permissions -----------------------------------------------------------
+
+    async def permissions(self) -> list[dict]:
+        return await self._get("/v1/permissions")  # type: ignore[return-value]
+
+    async def op(self, target: str) -> dict:
+        return await self._post("/v1/permissions/op", {"target": target})
+
+    async def deop(self, target: str) -> dict:
+        return await self._post("/v1/permissions/deop", {"target": target})
+
+    async def set_policy(self, policy: str) -> dict:
+        return await self._post("/v1/permissions/policy", {"policy": policy})
+
+    async def audit(self, limit: int = 100) -> list[dict]:
+        return await self._get("/v1/permissions/audit", limit=limit)  # type: ignore
+
+    async def kick(self, node_id: str) -> dict:
+        return await self._post(f"/v1/nodes/{node_id}/kick")
+
+    # -- cron ------------------------------------------------------------------
+
+    async def cron_request(self, cron_expr: str, prompt: str, **kw) -> dict:
+        template = TaskRequest(prompt=prompt, idempotency_key="template", **kw)
+        return await self._post("/v1/cron", {
+            "cron_expr": cron_expr,
+            "task_template": template.model_dump(mode="json")})
+
+    async def cron_list(self) -> list[dict]:
+        return await self._get("/v1/cron")  # type: ignore[return-value]
+
+    async def cron_approve(self, cron_id: str) -> dict:
+        return await self._post(f"/v1/cron/{cron_id}/approve")
+
+    async def cron_reject(self, cron_id: str, reason: str = "") -> dict:
+        return await self._post(f"/v1/cron/{cron_id}/reject", {"reason": reason})
+
+    async def cron_disable(self, cron_id: str) -> dict:
+        return await self._post(f"/v1/cron/{cron_id}/disable")
+
+    # -- suggestions & vcs -----------------------------------------------------
+
+    async def suggestions(self) -> list[dict]:
+        return await self._get("/v1/suggestions")  # type: ignore[return-value]
+
+    async def dismiss_suggestion(self, suggestion_id: str) -> dict:
+        return await self._post(f"/v1/suggestions/{suggestion_id}/dismiss")
+
+    async def vcs_history(self, limit: int = 50) -> list[dict]:
+        return await self._get("/v1/vcs/history", limit=limit)  # type: ignore
+
+    async def vcs_diff(self, a: str, b: str) -> str:
+        return (await self._get("/v1/vcs/diff", a=a, b=b))["diff"]  # type: ignore
+
+    async def vcs_rollback(self, sha: str) -> dict:
+        return await self._post("/v1/vcs/rollback", {"sha": sha})
