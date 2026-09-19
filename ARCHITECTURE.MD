@@ -129,7 +129,7 @@ Keep model/role changes infrequent enough to amortize loading and cache costs. U
 
 Distribute independent requests across ready workers. Within a worker, batch compatible sequences if the backend supports it. Tune concurrency against latency and memory pressure. A larger batch can improve aggregate output while slowing each stream.
 
-Hackathon primary: Qwen2.5-Coder-7B-Instruct Q4 runs whole on one laptop, so the 5 team laptops form five replicas with no per token network hop. Expected per replica footprint is about 4.7 GB weights plus 2 to 4 GB KV for 8k context. More replicas improve concurrent goodput, queue delay, and availability. They do not improve single request decode speed.
+Hackathon primary: Qwen2.5-Coder-7B-Instruct Q4 runs whole on one laptop, so the 5 team laptops form five replicas with no per token network hop. Expected per replica footprint is about 4.7 GB weights plus KV cache. Qwen2.5-7B uses GQA (4 KV heads), so KV is only about 0.44 GiB per 8k stream; budget roughly 0.5 GB per concurrent slot rather than a flat 2 to 4 GB, which allows more slots per node than a flat estimate suggests. More replicas improve concurrent goodput, queue delay, and availability. They do not improve single request decode speed.
 
 Projected throughput for 3 Mac plus 2 Arch replicas, to verify in benchmarks: single stream each gives about 190 tok/s raw and about 150 tok/s committed. Loaded with 3 to 4 concurrent streams each gives about 95 tok/s raw and about 70 to 80 tok/s committed goodput. Per request stays 15 to 50 tok/s by machine. The booth counter shows aggregate committed goodput, which clears 50 tok/s with headroom.
 
@@ -145,7 +145,7 @@ Hackathon cooperative targets, all Q4 through llama.cpp RPC or equivalent pipeli
 
 ### Experimental remote drafting
 
-A small model proposes token blocks; the target evaluates them and commits only verified output. A first experiment can use compatible token mappings and greedy verification.
+Status after research (see research/parallelism-modes.md section 5 and research/red-fable.md section 5): run speculation locally per replica, not across nodes. With gamma=4 drafts at 0.7 acceptance, the network RTT budget is only about 35 to 40 ms and only when the target decodes slowly (about 20 tok/s); at Mac target speeds the budget is negative even at zero RTT. A 0.5 to 1B draft model fits on every fleet laptop, so in-process drafting (`llama-server --model-draft`) strictly dominates. No consumer runtime exposes a network draft/verify/rollback interface anyway. Remote drafting stays a post-weekend experiment; the DGX Spark as a compute-bound verifier is the one configuration worth revisiting.
 
 This needs a custom token/state interface. Ordinary chat calls do not expose all required target verification and cache rollback operations. Model and cache support must be established before claiming a working pair.
 

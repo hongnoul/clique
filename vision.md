@@ -32,7 +32,7 @@ Single request speed does not improve by adding replicas. Claim throughput and a
 
 The network starts with 5 team laptops: 3 Macs plus 2 Arch or NVIDIA machines, each running one Qwen2.5-Coder-7B Q4 replica. No per token network hop. These are projections to verify in the benchmark sequence, not measured results.
 
-- Single stream per replica: Mac about 40 to 60 tok/s, Arch about 15 to 25 tok/s. Pool total about 190 tok/s raw, about 150 tok/s committed after failed checks and retries.
+- Single stream per replica: Mac about 40 to 60 tok/s, Arch about 15 to 25 tok/s. Pool total about 190 tok/s raw, about 150 tok/s committed after failed checks and retries. Caveat from research (research/red-fable.md): the Mac figure assumes M-series Pro/Max chips; base M1/M2/M3 do about 14 to 24 tok/s on 7B Q4, so re-base the pool total on the actual team hardware at benchmark time.
 - Loaded with 3 to 4 concurrent streams each: Mac about 25 tok/s, Arch about 10 tok/s. Pool total about 95 tok/s raw, about 70 to 80 tok/s committed goodput.
 - Per request experience stays 15 to 50 tok/s depending on machine, which feels interactive for code tasks completing in seconds.
 
