@@ -212,6 +212,8 @@ class SchedulerServer:
                 f"  snapshot once via python: curl -fsSL {base}/tui.py | python3 -"
                 f" --server {base} --once\n"
                 f"  full CLI install: curl -fsSL {base}/join.sh | sh\n"
+                "  (repo is private: export CLIQUE_GITHUB_TOKEN=github_pat_...\n"
+                "   with contents:read first, or the clone step aborts)\n"
             )
 
         @app.get("/dash.txt", response_class=PlainTextResponse)

@@ -80,6 +80,7 @@ async def test_index_menu_lists_all_flows(headless_server):
     body, _ = await afetch(headless_server, "/")
     for needle in ("/dash.txt", "/tui.py", "/join.sh"):
         assert needle in body, f"menu missing {needle}"
+    assert "CLIQUE_GITHUB_TOKEN" in body  # private repo: warn before install
     # /join is the spec'd alias of / (rest.py join assets)
     alias, _ = await afetch(headless_server, "/join")
     assert alias == body
