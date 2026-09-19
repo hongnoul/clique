@@ -90,6 +90,8 @@ async def test_dash_txt_snapshot(headless_server):
     assert "clique:" in body
     assert "NODES (0)" in body
     assert "TASKS" in body
+    # non-interactive footer: dash.txt has no key handling
+    assert "[q] quit" not in body
 
 
 async def test_tui_py_is_stdlib_only(headless_server):

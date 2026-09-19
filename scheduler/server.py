@@ -235,7 +235,7 @@ class SchedulerServer:
             }
             buf = io.StringIO()
             buf.write(f"clique @ {utcnow().isoformat(timespec='seconds')}\n")
-            buf.write("\n".join(render_lines(snap)))
+            buf.write("\n".join(render_lines(snap, interactive=False)))
             buf.write("\n")
             return buf.getvalue()
 

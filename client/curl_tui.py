@@ -53,7 +53,10 @@ def snapshot(base: str) -> dict:
     }
 
 
-def render_lines(snap: dict, width: int = 100) -> list[str]:
+def render_lines(snap: dict, width: int = 100,
+                 interactive: bool = True) -> list[str]:
+    """Render a snapshot. interactive=True shows curses key hints;
+    False omits them (for /dash.txt where no keys exist)."""
     L: list[str] = []
     cl = snap.get("clique") or {}
     if isinstance(cl, dict) and not cl.get("_error"):
@@ -111,7 +114,8 @@ def render_lines(snap: dict, width: int = 100) -> list[str]:
         L.append(f"CLUSTERS: {' '.join(parts)}")
 
     L.append("")
-    L.append("[q] quit  [r] refresh now  [s] snapshot-once mode: --once")
+    if interactive:
+        L.append("[q] quit  [r] refresh now  [s] snapshot-once mode: --once")
     return [ln[:width] for ln in L]
 
 
