@@ -23,14 +23,30 @@ class ServerAnnouncement:
 
 
 def _local_ip() -> str:
+    # Preferred: UDP-connect trick (no packet sent). Fails on LANs with no
+    # default route (offline hotspot), so fall back to interface enumeration.
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
-        s.connect(("8.8.8.8", 80))  # no packet sent for UDP connect
+        s.connect(("8.8.8.8", 80))
         return s.getsockname()[0]
     except OSError:
-        return "127.0.0.1"
+        pass
     finally:
         s.close()
+    try:
+        import psutil
+        candidates = []
+        for ifname, addrs in psutil.net_if_addrs().items():
+            for a in addrs:
+                if a.family == socket.AF_INET and not a.address.startswith("127."):
+                    # prefer private LAN ranges; hotspot bridges often 192.168.x
+                    priority = 0 if a.address.startswith(("192.168.", "10.", "172.")) else 1
+                    candidates.append((priority, a.address))
+        if candidates:
+            return sorted(candidates)[0][1]
+    except Exception:
+        pass
+    return "127.0.0.1"
 
 
 async def find_server(timeout_s: float = 5.0) -> ServerAnnouncement | None:
