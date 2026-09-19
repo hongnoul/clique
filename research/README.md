@@ -10,5 +10,6 @@ All tcj research lives here. Do not create `docs/research/` or other research fo
 | `red-sol.md` | Independent Apex research synthesis. Converges on the same verdicts (replica-first, "heterogeneous globally, homogeneous locally", no cross-node TP/EP/disaggregation). |
 | `frameworks-survey.md` | Distributed inference frameworks survey (llama.cpp RPC, exo, prima.cpp, Petals, distributed-llama, vLLM/SGLang, GPUStack). Fit ranking for tcj. |
 | `dgx-spark-hetero-scheduling.md` | DGX Spark role analysis + heterogeneous scheduling policy + embedding filler. |
+| `benchmarks.md` | Measured node envelopes (first: M5 Pro coordinator, 7B Q4). Projections vs reality. |
 
 Overlap note: `architecture-recommendation.md` is the conclusions layer and wins on architecture if any doc disagrees. `parallelism-modes.md` wins on raw numbers. `red-fable.md` and `red-sol.md` are earlier/independent syntheses kept for provenance.
