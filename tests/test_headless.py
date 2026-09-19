@@ -192,3 +192,39 @@ async def test_dashboard_app_boots_headless():
             "devices", "queue", "sessions", "governance"]
         await app.refresh_data()
         assert "unreachable" in str(app.query_one("#status").content)
+
+
+async def test_served_tui_runs_once_as_subprocess(headless_server,
+                                                  tmp_path):
+    """Closest thing to the advertised one-liner: fetch /tui.py and run
+    it with plain `python3 ... --once` in a subprocess (no venv, no
+    deps) against the live server."""
+    import subprocess
+    import sys
+
+    src, _ = await afetch(headless_server, "/tui.py")
+    script = tmp_path / "clique-tui.py"
+    script.write_text(src)
+    proc = await asyncio.to_thread(
+        subprocess.run,
+        [sys.executable, str(script), "--server", headless_server,
+         "--once"],
+        capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert "clique:" in proc.stdout
+    assert "NODES (0)" in proc.stdout
+
+
+async def test_cli_dash_once(headless_server, capsys):
+    """`clique dash --once --server URL` prints the /dash.txt snapshot."""
+    from typer.testing import CliRunner
+
+    from client.cli import app
+
+    result = await asyncio.to_thread(
+        CliRunner().invoke, app,
+        ["dash", "--server", headless_server, "--once"],
+    )
+    assert result.exit_code == 0, result.output
+    assert "clique:" in result.output
