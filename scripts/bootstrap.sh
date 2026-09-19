@@ -1,6 +1,9 @@
 #!/bin/sh
 # clique bootstrap: venv install + `clique` on PATH, one line for joiners.
-#   curl -fsSL https://raw.githubusercontent.com/hongnoul/tcj/main/scripts/bootstrap.sh | sh
+# Public repo:  curl -fsSL https://raw.githubusercontent.com/hongnoul/tcj/main/scripts/bootstrap.sh | sh
+# Private repo (this one): export CLIQUE_GITHUB_TOKEN=github_pat_... first, then
+#   curl -fsSL -H "Authorization: Bearer $CLIQUE_GITHUB_TOKEN" \
+#     https://raw.githubusercontent.com/hongnoul/tcj/main/scripts/bootstrap.sh | sh
 # or from a clone:  sh scripts/bootstrap.sh
 set -eu
 
@@ -143,9 +146,11 @@ else
             echo "NOTE: this repo (hongnoul/tcj) is PRIVATE."
             echo "The headless machine has no GitHub credentials, so git cannot even"
             echo "ask for a username (no tty) and aborts. Fix: create a fine-grained"
-            echo "PAT (github.com/settings/tokens, contents:read on hongnoul/tcj) and run:"
+            echo "PAT (github.com/settings/tokens, contents:read on hongnoul/tcj)."
+            echo "If you fetched this script without a token, re-fetch it WITH the token:"
             echo "  export CLIQUE_GITHUB_TOKEN=github_pat_..."
-            echo "  curl -fsSL https://raw.githubusercontent.com/hongnoul/tcj/main/scripts/bootstrap.sh | sh"
+            echo "  curl -fsSL -H \"Authorization: Bearer \$CLIQUE_GITHUB_TOKEN\" \\"
+            echo "    https://raw.githubusercontent.com/hongnoul/tcj/main/scripts/bootstrap.sh | sh"
             echo "Or make the repo public."
             echo
             diag_clone_failure

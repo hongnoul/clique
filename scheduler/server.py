@@ -254,50 +254,43 @@ class SchedulerServer:
 
         @app.get("/join.sh", response_class=PlainTextResponse)
         async def join_sh(request: Request) -> str:
-            """One-line full CLI installer pinned to this server."""
+            """One-line full CLI installer pinned to this server.
+
+            Serves scripts/bootstrap.sh verbatim with CLIQUE_SERVER pre-set,
+            so the installer logic lives in exactly one place. Private-repo
+            token support (CLIQUE_GITHUB_TOKEN) comes along automatically.
+            """
+            from pathlib import Path
+
             base = str(request.base_url).rstrip("/")
-            return (
+            script = (Path(__file__).resolve().parents[1] / "scripts"
+                      / "bootstrap.sh").read_text()
+            header = (
                 "#!/bin/sh\n"
                 "# full clique CLI install, server preconfigured to this node.\n"
                 f"#   curl -fsSL {base}/join.sh | sh\n"
+                "# private repo: export CLIQUE_GITHUB_TOKEN=github_pat_... first.\n"
                 "# lightweight alternative (no install, live TUI only):\n"
                 f"#   curl -fsSL {base}/tui.py | python3 - --server {base}\n"
-                "set -eu\n"
                 f"export CLIQUE_SERVER=\"{base}\"\n"
-                "REPO_URL=\"https://github.com/hongnoul/tcj\"\n"
-                "INSTALL_DIR=\"${CLIQUE_HOME:-$HOME/.clique/app}\"\n"
-                "BIN_DIR=\"${CLIQUE_BIN:-$HOME/.local/bin}\"\n"
-                "PY=\"\"\n"
-                "for cand in python3.13 python3.12 python3.11 python3; do\n"
-                "    if command -v \"$cand\" >/dev/null 2>&1; then\n"
-                "        if \"$cand\" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3,11) else 1)'; then\n"
-                "            PY=\"$cand\"; break\n"
-                "        fi\n"
-                "    fi\n"
-                "done\n"
-                "[ -n \"$PY\" ] || { echo \"error: python 3.11+ required\"; exit 1; }\n"
-                "export GIT_TERMINAL_PROMPT=0\n"
-                "export GIT_SSH_COMMAND=\"${GIT_SSH_COMMAND:-ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new}\"\n"
-                "command -v git >/dev/null 2>&1 || { echo \"error: git not found\"; exit 1; }\n"
-                "if [ -d \"$INSTALL_DIR/.git\" ]; then\n"
-                "    git -C \"$INSTALL_DIR\" pull --ff-only < /dev/null\n"
-                "elif [ -e \"$INSTALL_DIR\" ]; then\n"
-                "    echo \"error: $INSTALL_DIR exists but is not a git clone\"; exit 1\n"
-                "else\n"
-                "    mkdir -p \"$(dirname \"$INSTALL_DIR\")\"\n"
-                "    git clone --depth 1 \"$REPO_URL\" \"$INSTALL_DIR\" < /dev/null\n"
-                "fi\n"
-                "\"$PY\" -m venv \"$INSTALL_DIR/.venv\"\n"
-                "\"$INSTALL_DIR/.venv/bin/pip\" install -q -U pip\n"
-                "\"$INSTALL_DIR/.venv/bin/pip\" install -q -e \"$INSTALL_DIR\"\n"
-                "mkdir -p \"$BIN_DIR\"\n"
-                "for cmd in clique clique-agent clique-server; do\n"
-                "    ln -sf \"$INSTALL_DIR/.venv/bin/$cmd\" \"$BIN_DIR/$cmd\"\n"
-                "done\n"
+            )
+            # Strip the bootstrap shebang (already emitted above) and its
+            # trailing generic join hints; ours are server-pinned instead.
+            lines = script.splitlines(keepends=True)
+            if lines and lines[0].startswith("#!"):
+                lines = lines[1:]
+            cut = len(lines)
+            for i, ln in enumerate(lines):
+                if ln.startswith('echo "installed: $BIN_DIR/clique"'):
+                    cut = i
+                    break
+            body = "".join(lines[:cut])
+            footer = (
                 "echo \"installed: $BIN_DIR/clique (server: $CLIQUE_SERVER)\"\n"
                 "echo \"live TUI now:  clique dash --server $CLIQUE_SERVER\"\n"
                 "echo \"join now:      clique join --server $CLIQUE_SERVER --runtime echo --param-b 7\"\n"
             )
+            return header + body + footer
 
         return app
 

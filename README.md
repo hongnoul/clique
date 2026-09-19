@@ -120,7 +120,10 @@ python3 /tmp/clique-tui.py --server $CLIQUE
 curl -fsSL $CLIQUE/tui.py | python3 - --server $CLIQUE
 curl -fsSL $CLIQUE/tui.py | python3 - --server $CLIQUE --once
 
-# full CLI install (pinned to that server):
+# full CLI install (pinned to that server). This repo is private, so
+# export a fine-grained PAT (contents:read on hongnoul/tcj) first or
+# the clone step aborts with "terminal prompts disabled":
+export CLIQUE_GITHUB_TOKEN=github_pat_...
 curl -fsSL $CLIQUE/join.sh | sh
 ```
 
@@ -147,8 +150,19 @@ clients from each other. Use a hotspot instead: the server machine (or a
 phone) opens a hotspot, everyone joins it, and the server IP is typically
 `192.168.2.1` (Mac Internet Sharing) or the phone's gateway IP.
 
-One-line install on a new device:
+One-line install on a new device (this repo is private: create a
+fine-grained PAT with contents read on `hongnoul/tcj`, then fetch the
+installer with the token so both the script download and the clone authenticate):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/hongnoul/tcj/main/scripts/bootstrap.sh | sh
+export CLIQUE_GITHUB_TOKEN=github_pat_...
+curl -fsSL -H "Authorization: Bearer $CLIQUE_GITHUB_TOKEN" \
+  https://raw.githubusercontent.com/hongnoul/tcj/main/scripts/bootstrap.sh | sh
 ```
+
+Headless (no tty) notes: the installer sets `GIT_TERMINAL_PROMPT=0` and SSH
+`BatchMode` so git fails fast instead of hanging on a credential prompt. The
+token is sent as an `Authorization` header, never embedded in the remote URL.
+If the clone fails, the script prints diagnostics plus a `contents:read`
+tarball fallback. No token and no other GitHub credentials means the clone
+aborts with `could not read Username: terminal prompts disabled`.

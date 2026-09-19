@@ -16,6 +16,7 @@ from __future__ import annotations
 import ast
 import asyncio
 import socket
+from pathlib import Path
 import urllib.request
 
 import pytest_asyncio
@@ -110,13 +111,43 @@ async def test_tui_py_is_stdlib_only(headless_server):
     assert "def main" in src
 
 
-async def test_join_sh_pins_server(headless_server):
+async def test_join_sh_pins_server(headless_server, tmp_path):
     body, _ = await afetch(headless_server, "/join.sh")
     assert headless_server in body
     assert "GIT_TERMINAL_PROMPT=0" in body  # headless-safe, no prompts
     assert "CLIQUE_GITHUB_TOKEN" in body  # private-repo support ships too
     assert body.startswith("#!/bin/sh")
     assert body.count("#!/bin/sh") == 1  # no doubled shebang
+    assert body.count('echo "installed:') == 1  # no duplicated footer
+    # parity: installer logic lives in scripts/bootstrap.sh, served verbatim
+    disk = (Path(__file__).resolve().parents[1] / "scripts"
+            / "bootstrap.sh").read_text()
+    for line in ("fetch_tarball() {", "diag_clone_failure() {",
+                 'export GIT_CONFIG_KEY_0="http.https://github.com/.extraheader"'):
+        assert line in disk, f"bootstrap.sh lost: {line}"
+        assert line in body, f"join.sh diverged from bootstrap.sh: {line}"
+    # served script is valid POSIX sh
+    import subprocess
+    script = tmp_path / "join-served.sh"
+    script.write_text(body)
+    proc = await asyncio.to_thread(
+        subprocess.run, ["sh", "-n", str(script)],
+        capture_output=True, text=True, timeout=30)
+    assert proc.returncode == 0, f"served join.sh fails sh -n: {proc.stderr}"
+
+
+def test_bootstrap_sh_is_posix_clean():
+    import subprocess
+    src = (Path(__file__).resolve().parents[1] / "scripts"
+           / "bootstrap.sh").read_text()
+    assert "GIT_TERMINAL_PROMPT=0" in src
+    assert "CLIQUE_GITHUB_TOKEN" in src
+    assert "$'" not in src  # no bashisms: runs under POSIX sh
+    proc = subprocess.run(
+        ["sh", "-n", str(Path(__file__).resolve().parents[1]
+                         / "scripts" / "bootstrap.sh")],
+        capture_output=True, text=True, timeout=30)
+    assert proc.returncode == 0, f"bootstrap.sh fails sh -n: {proc.stderr}"
 
 
 async def test_snapshot_and_render_empty(headless_server):
