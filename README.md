@@ -4,7 +4,7 @@
 
 Status: target for HackMIT 2026. This is a goal to prove, not a result already measured.
 
-This README restates [vision.md](vision.md). Details: [Vision](vision.md) · [Scheduler architecture](docs/architecture.md).
+This README restates [vision.md](vision.md). Details: [Vision](vision.md) · [Scheduler architecture](ARCHITECTURE.MD) · [Research](research/README.md).
 
 ## The product in one paragraph
 
@@ -66,10 +66,11 @@ Keep the durable ledger, fair queue, recovery, and fixed rate settlement. Add pi
 tcj/
   README.md          # this file, restatement of vision.md
   vision.md          # full vision with throughput and money math
-  coordinator/       # TODO: API, admission, scheduler, ledger
-  worker/            # TODO: capacity agent, inference backend
-  docs/
-    architecture.md  # scheduler and node-capacity protocol
+  ARCHITECTURE.MD    # scheduler and node-capacity protocol
+  research/          # parallelism, frameworks, DGX Spark, architecture recommendation
+  client/            # TODO: consumer API client
+  scheduler/         # TODO: API, admission, scheduler, ledger
+  node/              # TODO: capacity agent, inference backend
 ```
 
 ## Getting started

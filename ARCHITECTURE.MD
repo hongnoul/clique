@@ -1,6 +1,6 @@
 # Scheduler architecture draft
 
-[Overview](../README.md) · [Vision](../vision.md) · [Evidence and acceptance plan](../../hackmit-prep/docs/validation.md)
+[Overview](README.md) · [Vision](vision.md) · [Research](research/README.md)
 
 This document specifies intended behavior. None of the interfaces or guarantees below is implemented yet.
 

@@ -98,4 +98,4 @@ Each new laptop appears on the booth screen within a minute as added goodput and
 
 Keep the durable ledger, fair queue, recovery, and fixed rate settlement. Add pipeline replicas for the 30B MoE class. Add pipeline sharding toward 70B only after the 7B money loop is stable. Pursue V4 Flash class serving only with 30 plus stable nodes and measured hop latency.
 
-Details: [Scheduler architecture](docs/architecture.md) · [Evidence and acceptance plan](docs/validation.md)
+Details: [Scheduler architecture](ARCHITECTURE.MD) · [Research](research/README.md)
