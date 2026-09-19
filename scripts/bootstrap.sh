@@ -35,14 +35,18 @@ command -v git >/dev/null 2>&1 || {
 TARBALL_URL="https://github.com/hongnoul/tcj/archive/refs/heads/main.tar.gz"
 
 # Private-repo support: export CLIQUE_GITHUB_TOKEN (fine-grained PAT, contents:read)
-# on machines with no other GitHub credentials. If unset and the clone fails
-# with an auth error, we tell the user exactly that (this repo is private).
+# on machines with no other GitHub credentials. Injected via git's
+# GIT_CONFIG_* env (Authorization header), so the token never lands in the
+# remote URL, and plain `git clone` / `git pull` pick it up with no arg plumbing.
+AUTH_HEADER=""
 if [ -n "${CLIQUE_GITHUB_TOKEN:-}" ]; then
-    AUTH_REPO_URL="https://oauth2:${CLIQUE_GITHUB_TOKEN}@github.com/hongnoul/tcj"
-    AUTH_TARBALL_HEADER="Authorization: Bearer ${CLIQUE_GITHUB_TOKEN}"
-else
-    AUTH_REPO_URL="$REPO_URL"
-    AUTH_TARBALL_HEADER=""
+    AUTH_HEADER="Authorization: Bearer ${CLIQUE_GITHUB_TOKEN}"
+    export GIT_CONFIG_COUNT=1
+    export GIT_CONFIG_KEY_0="http.https://github.com/.extraheader"
+    export GIT_CONFIG_VALUE_0="$AUTH_HEADER"
+    # Never fall back to interactive credential helpers on a headless box:
+    # a bad/missing token must fail fast, not hang or silently use stale creds.
+    export GIT_ASKPASS="$(command -v false)"
 fi
 
 diag_clone_failure() {
@@ -64,22 +68,47 @@ diag_clone_failure() {
 
 fetch_tarball() {
     # Fallback when git is broken/missing-ca/blocked: no git needed, just curl+tar.
+    # Downloads to a temp file first, validates the gzip magic, then unpacks, so
+    # an HTML error page can never be mistaken for a source tree.
     dest="$1"
     command -v curl >/dev/null 2>&1 || { echo "error: curl not found, can't fetch tarball"; return 1; }
     command -v tar >/dev/null 2>&1 || { echo "error: tar not found, can't unpack tarball"; return 1; }
+    case "$dest" in
+        ""|"/"|"$HOME"|"$HOME/" ) echo "error: refusing to unpack tarball into '$dest'"; return 1;;
+    esac
+    tmpfile="${TMPDIR:-/tmp}/clique-tarball-$$.tgz"
+    rm -f "$tmpfile"
+    if [ -n "$AUTH_HEADER" ]; then
+        if ! curl_err=$(curl -fsSL -H "$AUTH_HEADER" --max-time 120 "$TARBALL_URL" -o "$tmpfile" 2>&1); then
+            echo "error: tarball download failed ($curl_err)"
+            rm -f "$tmpfile"
+            return 1
+        fi
+    elif ! curl -fsSL --max-time 120 "$TARBALL_URL" -o "$tmpfile"; then
+        echo "error: tarball download failed"
+        rm -f "$tmpfile"
+        return 1
+    fi
+    # gzip magic 1f 8b, checked portably (script runs under POSIX sh, not bash)
+    if ! head -c 2 "$tmpfile" | od -An -tx1 | grep -q "1f 8b"; then
+        echo "error: tarball download is not gzip (bad token? private repo?)"
+        head -c 300 "$tmpfile" | tr -d '\0' | head -n 5 || true
+        rm -f "$tmpfile"
+        return 1
+    fi
     rm -rf "$dest"
     mkdir -p "$dest"
-    echo "git clone failed; trying tarball"
-    if [ -n "$AUTH_TARBALL_HEADER" ]; then
-        DL_OK=$(curl -fsSL -H "$AUTH_TARBALL_HEADER" --max-time 120 "$TARBALL_URL" | tar -xz --strip-components=1 -C "$dest" 2>&1) || DL_OK="failed: $DL_OK"
-    else
-        DL_OK=$(curl -fsSL --max-time 120 "$TARBALL_URL" | tar -xz --strip-components=1 -C "$dest" 2>&1) || DL_OK="failed: $DL_OK"
+    if tar -xz --strip-components=1 -C "$dest" -f "$tmpfile"; then
+        rm -f "$tmpfile"
+        if [ -f "$dest/pyproject.toml" ] && grep -q '^name = "clique"' "$dest/pyproject.toml" 2>/dev/null; then
+            echo "note: installed from tarball (no .git history; re-run bootstrap to refresh)"
+            return 0
+        fi
+        echo "error: tarball unpacked but is not a clique checkout"
+        return 1
     fi
-    if [ -z "$DL_OK" ]; then
-        echo "note: installed from tarball (no .git history; re-run bootstrap to refresh)"
-        return 0
-    fi
-    echo "error: tarball fallback also failed ($DL_OK)"
+    echo "error: tarball unpack failed"
+    rm -f "$tmpfile"
     return 1
 }
 
@@ -88,7 +117,7 @@ if [ -f "pyproject.toml" ] && grep -q '^name = "clique"' pyproject.toml 2>/dev/n
     SRC_DIR="$(pwd)"
 else
     if [ -d "$INSTALL_DIR/.git" ]; then
-        if ! git -C "$INSTALL_DIR" pull --ff-only; then
+        if ! git -C "$INSTALL_DIR" pull --ff-only < /dev/null; then
             echo "error: 'git pull --ff-only' failed in $INSTALL_DIR"
             echo "fix with: git -C \"$INSTALL_DIR\" fetch origin && git -C \"$INSTALL_DIR\" reset --hard origin/main"
             exit 1
@@ -104,7 +133,7 @@ else
     else
         mkdir -p "$(dirname "$INSTALL_DIR")"
         CLONE_LOG="${TMPDIR:-/tmp}/clique-clone-$$.log"
-        if git clone --depth 1 "$AUTH_REPO_URL" "$INSTALL_DIR" < /dev/null 2>"$CLONE_LOG"; then
+        if git clone --depth 1 "$REPO_URL" "$INSTALL_DIR" < /dev/null 2>"$CLONE_LOG"; then
             rm -f "$CLONE_LOG"
         else
             echo "error: git clone failed:"
