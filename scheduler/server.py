@@ -21,7 +21,8 @@ import logging
 import secrets
 from datetime import timedelta
 
-from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import PlainTextResponse
 
 from common import protocol
 from common.config import Config
@@ -191,6 +192,112 @@ class SchedulerServer:
             s = self.router.queue_stats()
             s["nodes"] = {n.node_id: n.status.value for n in self.registry.list_nodes()}
             return s
+
+        # ------------------------------------------------ headless curl flow
+        # Zero-install TUI for monitor-less nodes: pure curl, or
+        # curl + system python3 (stdlib only). No pip, no clone.
+
+        @app.get("/", response_class=PlainTextResponse)
+        async def index_txt(request: Request) -> str:
+            base = str(request.base_url).rstrip("/")
+            return (
+                "clique headless access (pick one):\n"
+                f"  snapshot:  curl -s {base}/dash.txt\n"
+                f"  live loop: watch -n 2 curl -s {base}/dash.txt\n"
+                f"  live TUI:  curl -fsSL {base}/tui.py -o /tmp/clique-tui.py"
+                " && python3 /tmp/clique-tui.py --server "
+                f"{base}\n"
+                f"  one-liner: curl -fsSL {base}/tui.py | python3 - --server "
+                f"{base}\n"
+                f"  snapshot once via python: curl -fsSL {base}/tui.py | python3 -"
+                f" --server {base} --once\n"
+                f"  full CLI install: curl -fsSL {base}/join.sh | sh\n"
+            )
+
+        @app.get("/dash.txt", response_class=PlainTextResponse)
+        async def dash_txt() -> str:
+            """Plain-text dashboard snapshot: curl-only, no python needed."""
+            import io
+            from client.curl_tui import render_lines
+            snap = {
+                "clique": {
+                    "name": self.config.server.clique_name,
+                    "policy": self.config.server.permission_policy,
+                    "default_model": self.config.server.default_model,
+                },
+                "nodes": [n.model_dump(mode="json")
+                          for n in self.registry.list_nodes()],
+                "clusters": [c.model_dump(mode="json")
+                             for c in self.registry.list_clusters()],
+                "stats": self.router.queue_stats(),
+                "tasks": [v.model_dump(mode="json")
+                          for v in self.router.list_tasks()],
+            }
+            buf = io.StringIO()
+            buf.write(f"clique @ {utcnow().isoformat(timespec='seconds')}\n")
+            buf.write("\n".join(render_lines(snap, interactive=False)))
+            buf.write("\n")
+            return buf.getvalue()
+
+        @app.get("/tui.py", response_class=PlainTextResponse)
+        async def tui_py() -> str:
+            """Stdlib-only live TUI source: curl | python3, no install."""
+            from pathlib import Path
+            return (Path(__file__).resolve().parents[1] / "client"
+                    / "curl_tui.py").read_text()
+
+        @app.get("/join", response_class=PlainTextResponse)
+        async def join_page(request: Request) -> str:
+            """Join page (spec: rest.py join assets): menu + one-liner."""
+            # Alias of / with the spec'd path so /join works as documented.
+            return await index_txt(request)
+
+        @app.get("/join.sh", response_class=PlainTextResponse)
+        async def join_sh(request: Request) -> str:
+            """One-line full CLI installer pinned to this server."""
+            base = str(request.base_url).rstrip("/")
+            return (
+                "#!/bin/sh\n"
+                "# full clique CLI install, server preconfigured to this node.\n"
+                f"#   curl -fsSL {base}/join.sh | sh\n"
+                "# lightweight alternative (no install, live TUI only):\n"
+                f"#   curl -fsSL {base}/tui.py | python3 - --server {base}\n"
+                "set -eu\n"
+                f"export CLIQUE_SERVER=\"{base}\"\n"
+                "REPO_URL=\"https://github.com/hongnoul/tcj\"\n"
+                "INSTALL_DIR=\"${CLIQUE_HOME:-$HOME/.clique/app}\"\n"
+                "BIN_DIR=\"${CLIQUE_BIN:-$HOME/.local/bin}\"\n"
+                "PY=\"\"\n"
+                "for cand in python3.13 python3.12 python3.11 python3; do\n"
+                "    if command -v \"$cand\" >/dev/null 2>&1; then\n"
+                "        if \"$cand\" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3,11) else 1)'; then\n"
+                "            PY=\"$cand\"; break\n"
+                "        fi\n"
+                "    fi\n"
+                "done\n"
+                "[ -n \"$PY\" ] || { echo \"error: python 3.11+ required\"; exit 1; }\n"
+                "export GIT_TERMINAL_PROMPT=0\n"
+                "export GIT_SSH_COMMAND=\"${GIT_SSH_COMMAND:-ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new}\"\n"
+                "command -v git >/dev/null 2>&1 || { echo \"error: git not found\"; exit 1; }\n"
+                "if [ -d \"$INSTALL_DIR/.git\" ]; then\n"
+                "    git -C \"$INSTALL_DIR\" pull --ff-only < /dev/null\n"
+                "elif [ -e \"$INSTALL_DIR\" ]; then\n"
+                "    echo \"error: $INSTALL_DIR exists but is not a git clone\"; exit 1\n"
+                "else\n"
+                "    mkdir -p \"$(dirname \"$INSTALL_DIR\")\"\n"
+                "    git clone --depth 1 \"$REPO_URL\" \"$INSTALL_DIR\" < /dev/null\n"
+                "fi\n"
+                "\"$PY\" -m venv \"$INSTALL_DIR/.venv\"\n"
+                "\"$INSTALL_DIR/.venv/bin/pip\" install -q -U pip\n"
+                "\"$INSTALL_DIR/.venv/bin/pip\" install -q -e \"$INSTALL_DIR\"\n"
+                "mkdir -p \"$BIN_DIR\"\n"
+                "for cmd in clique clique-agent clique-server; do\n"
+                "    ln -sf \"$INSTALL_DIR/.venv/bin/$cmd\" \"$BIN_DIR/$cmd\"\n"
+                "done\n"
+                "echo \"installed: $BIN_DIR/clique (server: $CLIQUE_SERVER)\"\n"
+                "echo \"live TUI now:  clique dash --server $CLIQUE_SERVER\"\n"
+                "echo \"join now:      clique join --server $CLIQUE_SERVER --runtime echo --param-b 7\"\n"
+            )
 
         return app
 
