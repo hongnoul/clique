@@ -114,6 +114,9 @@ async def test_join_sh_pins_server(headless_server):
     body, _ = await afetch(headless_server, "/join.sh")
     assert headless_server in body
     assert "GIT_TERMINAL_PROMPT=0" in body  # headless-safe, no prompts
+    assert "CLIQUE_GITHUB_TOKEN" in body  # private-repo support ships too
+    assert body.startswith("#!/bin/sh")
+    assert body.count("#!/bin/sh") == 1  # no doubled shebang
 
 
 async def test_snapshot_and_render_empty(headless_server):
