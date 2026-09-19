@@ -124,6 +124,10 @@ curl -fsSL $CLIQUE/tui.py | python3 - --server $CLIQUE --once
 curl -fsSL $CLIQUE/join.sh | sh
 ```
 
+After install, `clique dash --server $CLIQUE` polls the same snapshot
+in a loop; `clique dash --full` opens the fullscreen textual TUI
+(Devices, Queue, Sessions, Governance tabs) when you have a tty.
+
 Implemented: mDNS discovery, signed registration (first client node is op),
 heartbeats, durable sqlite queue, busyness- and size-aware routing (longer
 prompts to bigger models, one task per node), streaming results, retry on

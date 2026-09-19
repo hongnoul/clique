@@ -153,3 +153,40 @@ def test_render_lines_unreachable():
             "tasks": {"_error": "x"}}
     text = "\n".join(render_lines(snap))
     assert "unreachable" in text
+
+
+def test_summarize_flattens_snapshot():
+    from client.tui import summarize
+
+    snap = {
+        "nodes": [{"display_name": "n1", "status": "ready", "op_level": "op",
+                   "current_task_id": None,
+                   "model": {"family": "q", "parameter_count_b": 7}}],
+        "tasks": [{"request": {"task_id": "t-1", "prompt": "hi"},
+                   "state": "queued", "assigned_node": None}],
+        "stats": {"by_state": {"queued": 1}},
+        "clusters": [{"cluster_key": "q-7b", "node_ids": ["a"]}],
+    }
+    rows = summarize(snap)
+    assert rows["nodes"] == [("n1", "ready", "q-7", "op", "-")]
+    assert rows["tasks"] == [("t-1", "queued", "-", "hi")]
+    assert rows["queue"] == [("queued", "1")]
+    assert rows["clusters"] == [("q-7b", "1")]
+
+
+async def test_dashboard_app_boots_headless():
+    """Real Textual app boots in headless pilot mode with 4 tabs and
+    degrades to 'unreachable' instead of crashing (nothing listening)."""
+    from textual.widgets import TabbedContent
+
+    from client.sdk import CliqueClient
+    from client.tui import DashboardApp
+
+    app = DashboardApp(CliqueClient("http://127.0.0.1:1"), interval=60.0)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        tabs = app.query_one(TabbedContent)
+        assert [t.id for t in tabs.query("TabPane")] == [
+            "devices", "queue", "sessions", "governance"]
+        await app.refresh_data()
+        assert "unreachable" in str(app.query_one("#status").content)

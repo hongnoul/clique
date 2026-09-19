@@ -4,7 +4,7 @@ Commands:
   clique serve                       run the server node here
   clique join [--server URL] ...     run an agent on this device
   clique nodes [--server URL]        list nodes and clusters
-  clique dash [--server URL]         live terminal dashboard (polls /dash.txt)
+  clique dash [--server URL] [--full]  live terminal dashboard (polls /dash.txt)
   clique submit PROMPT               submit a task and stream to done
   clique task TASK_ID [--cancel]     inspect or cancel a task
   clique stats                       queue and node stats
@@ -144,11 +144,18 @@ def task(task_id: str, server: str = typer.Option(None),
 def dash(server: str = typer.Option(None),
          once: bool = typer.Option(False, "--once",
                                    help="print one snapshot and exit"),
-         interval: float = typer.Option(2.0, "--interval")) -> None:
+         interval: float = typer.Option(2.0, "--interval"),
+         full: bool = typer.Option(False, "--full",
+                                   help="fullscreen textual TUI "
+                                   "(needs local install + tty)")) -> None:
     """Live terminal dashboard (headless-friendly, polls the server)."""
+    client = _resolve(server)
+    if full:
+        from client.tui import DashboardApp
+        asyncio.run(DashboardApp(client, interval=interval).run_dashboard())
+        return
     import time
     import urllib.request
-    client = _resolve(server)
     base = client.base_url
 
     def fetch(path: str) -> str:
