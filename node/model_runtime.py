@@ -1,62 +1,121 @@
-"""Adapter over the local model runtime.
+"""Model runtime adapters (MVP implementation).
 
-Primary backend: llama.cpp ``llama-server`` (Metal on macOS, CUDA on
-Linux/NVIDIA), spawned and supervised by this module, speaking its
-OpenAI-compatible HTTP API on localhost. Secondary backend: Ollama, for
-users who already have it (vision dump: "or can connect your own").
-
-Model files come from huggingface_hub with revision pinning; the server
-node can also proxy GGUFs over LAN so joiners avoid WAN pulls
-(ARCHITECTURE.MD §1a).
+Backends:
+- EchoRuntime: deterministic fake for tests/demos with no model installed.
+- OpenAICompatRuntime: any OpenAI-compatible local server (ollama,
+  llama-server, LM Studio) via streaming /chat/completions.
 """
 
 from __future__ import annotations
 
-from pathlib import Path
+import asyncio
+import json
 from typing import AsyncIterator
 
+import httpx
+
+from common.errors import ModelNotReadyError
 from common.types import ModelSpec
 
 
-class ModelRuntime:
-    """Owns exactly one loaded model process/connection per node."""
-
-    def __init__(self, backend: str, model_dir: Path) -> None:
-        """backend: "llama-server" | "ollama"."""
-        ...
-
-    async def ensure_model(self, model_ref: str, lan_mirror: str | None = None) -> ModelSpec:
-        """Resolve model_ref (HF repo id or cluster key) to a local GGUF,
-        downloading from lan_mirror first, then Hugging Face. Verifies
-        sha256. Returns the concrete ModelSpec (with artifact_hash)."""
-        ...
-
-    async def load(self, spec: ModelSpec) -> None:
-        """Start/attach the backend with the model, wait for warmup
-        (first inference completes), raise ModelNotReadyError on failure."""
-        ...
-
-    async def unload(self) -> None:
-        """Stop the backend process and verify memory is actually
-        reclaimed (RSS/VRAM drop), not just that the process exited."""
-        ...
-
-    async def infer_stream(
-        self,
-        prompt: str,
-        context_blob: bytes | None,
-        max_tokens: int,
-    ) -> AsyncIterator[str]:
-        """Run one generation, yielding text deltas. context_blob is the
-        serialized session context to prepend (server-held sessions)."""
-        ...
-
-    async def cancel(self) -> None:
-        """Abort the in-flight generation promptly (MsgRevokeTask path)."""
-        ...
+class BaseRuntime:
+    def __init__(self) -> None:
+        self._cancel = asyncio.Event()
 
     async def health(self) -> bool:
-        """True only if the backend answers a real (tiny) inference, not
-        just a TCP connect: reachable-but-busy is not healthy capacity
-        (ARCHITECTURE.MD §2)."""
-        ...
+        raise NotImplementedError
+
+    async def infer_stream(self, prompt: str, max_tokens: int) -> AsyncIterator[str]:
+        raise NotImplementedError
+        yield  # pragma: no cover
+
+    async def cancel(self) -> None:
+        self._cancel.set()
+
+
+class EchoRuntime(BaseRuntime):
+    """Echoes the prompt back word by word with a small delay."""
+
+    def __init__(self, delay_s: float = 0.005) -> None:
+        super().__init__()
+        self.delay_s = delay_s
+
+    async def health(self) -> bool:
+        return True
+
+    async def infer_stream(self, prompt: str, max_tokens: int) -> AsyncIterator[str]:
+        self._cancel.clear()
+        words = prompt.split() or ["(empty)"]
+        yield f"echo[{len(words)}w]: "
+        for w in words[:max_tokens]:
+            if self._cancel.is_set():
+                return
+            await asyncio.sleep(self.delay_s)
+            yield w + " "
+
+
+class OpenAICompatRuntime(BaseRuntime):
+    """Streams from an OpenAI-compatible endpoint on localhost."""
+
+    def __init__(self, base_url: str, model_name: str, timeout_s: float = 300.0) -> None:
+        super().__init__()
+        self.base_url = base_url.rstrip("/")
+        self.model_name = model_name
+        self.timeout_s = timeout_s
+
+    async def health(self) -> bool:
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as c:
+                r = await c.get(f"{self.base_url}/models")
+                return r.status_code == 200
+        except httpx.HTTPError:
+            return False
+
+    async def infer_stream(self, prompt: str, max_tokens: int) -> AsyncIterator[str]:
+        self._cancel.clear()
+        body = {
+            "model": self.model_name,
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": max_tokens,
+            "stream": True,
+        }
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout_s) as c:
+                async with c.stream("POST", f"{self.base_url}/chat/completions", json=body) as r:
+                    if r.status_code != 200:
+                        text = (await r.aread()).decode(errors="replace")[:500]
+                        raise ModelNotReadyError(f"backend {r.status_code}: {text}")
+                    async for line in r.aiter_lines():
+                        if self._cancel.is_set():
+                            return
+                        if not line.startswith("data:"):
+                            continue
+                        data = line[5:].strip()
+                        if data == "[DONE]":
+                            return
+                        try:
+                            delta = json.loads(data)["choices"][0]["delta"].get("content")
+                        except (KeyError, IndexError, json.JSONDecodeError):
+                            continue
+                        if delta:
+                            yield delta
+        except httpx.HTTPError as e:
+            raise ModelNotReadyError(f"backend unreachable: {e}") from e
+
+
+def build_runtime(runtime: str, base_url: str = "", model_name: str = "") -> BaseRuntime:
+    if runtime == "echo":
+        return EchoRuntime()
+    if runtime == "openai-compat":
+        return OpenAICompatRuntime(base_url, model_name)
+    raise ModelNotReadyError(f"unknown runtime: {runtime}")
+
+
+def spec_from_config(cfg: "NodeConfig") -> ModelSpec:  # noqa: F821
+    from common.config import NodeConfig  # noqa: F401
+    return ModelSpec(
+        family=cfg.model_family,
+        parameter_count_b=cfg.model_parameter_b,
+        runtime=cfg.model_runtime,
+        context_window=cfg.context_window,
+    )

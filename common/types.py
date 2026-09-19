@@ -1,46 +1,44 @@
-"""Shared domain types for the clique.
+"""Shared domain types for the clique (MVP implementation).
 
-Terminology (vision.md): a *node* is one device, a *cluster* is all nodes
-running the same model, the *clique* is every node on the network. The
-*server node* runs the scheduler; all others are *client nodes*.
-
-Spec only. All bodies are `...`.
+Pydantic models so wire serialization, validation, and API schemas share
+one definition. Terminology: node = device, cluster = nodes running the
+same model, clique = all nodes; one server node runs the scheduler.
 """
 
 from __future__ import annotations
 
 import enum
-from dataclasses import dataclass, field
-from datetime import datetime
+import hashlib
+from datetime import datetime, timezone
+
+from pydantic import BaseModel, Field
 
 
-class NodeRole(enum.Enum):
-    """Role a node plays in the clique."""
+def utcnow() -> datetime:
+    return datetime.now(timezone.utc)
 
+
+class NodeRole(str, enum.Enum):
     SERVER = "server"
     CLIENT = "client"
 
 
-class OpLevel(enum.Enum):
-    """Permission level of a node/user. First client node defaults to OP."""
-
-    OWNER = "owner"  # the server node itself
-    OP = "op"  # granted admin (approve cron, /op others, change policy)
-    MEMBER = "member"  # normal participant
-    GUEST = "guest"  # read-only / rate-limited
+class OpLevel(str, enum.Enum):
+    OWNER = "owner"
+    OP = "op"
+    MEMBER = "member"
+    GUEST = "guest"
 
 
-class NodeStatus(enum.Enum):
-    """Liveness/availability as tracked by the registry."""
-
-    JOINING = "joining"  # registered, model not yet warm
-    READY = "ready"  # warm model, idle, accepting tasks
-    BUSY = "busy"  # running its one assigned task
-    DRAINING = "draining"  # finishing current task, no new assignments
-    OFFLINE = "offline"  # missed heartbeats past threshold
+class NodeStatus(str, enum.Enum):
+    JOINING = "joining"
+    READY = "ready"
+    BUSY = "busy"
+    DRAINING = "draining"
+    OFFLINE = "offline"
 
 
-class TaskState(enum.Enum):
+class TaskState(str, enum.Enum):
     QUEUED = "queued"
     ASSIGNED = "assigned"
     RUNNING = "running"
@@ -50,9 +48,7 @@ class TaskState(enum.Enum):
     EXPIRED = "expired"
 
 
-class TaskType(enum.Enum):
-    """Coarse task classes used for routing and overload detection."""
-
+class TaskType(str, enum.Enum):
     CHAT = "chat"
     CODE_GENERATION = "code_generation"
     SUMMARIZATION = "summarization"
@@ -60,138 +56,124 @@ class TaskType(enum.Enum):
     OTHER = "other"
 
 
-@dataclass
-class ModelSpec:
-    """Identity of a model a node can serve.
-
-    Nodes with equal `family + quantization` (artifact hash when available)
-    belong to the same cluster.
-    """
-
-    family: str  # e.g. "qwen2.5-coder"
-    parameter_count_b: float  # e.g. 7.0
-    quantization: str  # e.g. "Q4_K_M"
-    artifact_hash: str | None  # GGUF sha256 when known
-    context_window: int  # max context tokens
-    runtime: str  # "llama-server" | "ollama" | ...
-    capabilities: set[TaskType] = field(default_factory=set)
+class ModelSpec(BaseModel):
+    family: str
+    parameter_count_b: float
+    quantization: str = "none"
+    artifact_hash: str | None = None
+    context_window: int = 8192
+    runtime: str = "echo"  # "echo" | "openai-compat"
+    capabilities: list[TaskType] = Field(default_factory=lambda: [TaskType.CHAT])
 
     def cluster_key(self) -> str:
-        """Stable key grouping nodes into a cluster (family+size+quant,
-        preferring artifact_hash when present)."""
-        ...
+        if self.artifact_hash:
+            return f"{self.family}:{self.artifact_hash[:12]}"
+        return f"{self.family}-{self.parameter_count_b:g}b-{self.quantization}"
 
 
-@dataclass
-class ResourceSnapshot:
-    """Point-in-time measured resources of a node.
-
-    Missing telemetry MUST be None, never guessed (ARCHITECTURE.MD §2).
-    """
-
-    taken_at: datetime
-    cpu_percent: float | None
-    memory_total_mb: int | None
-    memory_available_mb: int | None
-    gpu_name: str | None
-    vram_total_mb: int | None
-    vram_available_mb: int | None
-    on_battery: bool | None
-    load_avg_1m: float | None
-    measured_decode_tok_s: float | None  # from benchmark, not spec sheet
-    measured_prefill_tok_s: float | None
+class ResourceSnapshot(BaseModel):
+    taken_at: datetime = Field(default_factory=utcnow)
+    cpu_percent: float | None = None
+    memory_total_mb: int | None = None
+    memory_available_mb: int | None = None
+    gpu_name: str | None = None
+    vram_total_mb: int | None = None
+    vram_available_mb: int | None = None
+    on_battery: bool | None = None
+    load_avg_1m: float | None = None
+    measured_decode_tok_s: float | None = None
+    measured_prefill_tok_s: float | None = None
 
 
-@dataclass
-class NodeInfo:
-    """Registry record for one node."""
-
-    node_id: str  # stable id derived from the node public key
+class NodeInfo(BaseModel):
+    node_id: str
     display_name: str
-    role: NodeRole
-    op_level: OpLevel
-    status: NodeStatus
-    address: str  # host:port of the node agent
-    public_key: bytes
-    model: ModelSpec | None  # None while still choosing/downloading
-    resources: ResourceSnapshot | None
-    joined_at: datetime
-    last_heartbeat_at: datetime | None
-    current_task_id: str | None  # one task per node invariant
+    role: NodeRole = NodeRole.CLIENT
+    op_level: OpLevel = OpLevel.MEMBER
+    status: NodeStatus = NodeStatus.JOINING
+    address: str = ""
+    public_key: str = ""  # hex
+    model: ModelSpec | None = None
+    resources: ResourceSnapshot | None = None
+    joined_at: datetime = Field(default_factory=utcnow)
+    last_heartbeat_at: datetime | None = None
+    current_task_id: str | None = None
 
 
-@dataclass
-class Cluster:
-    """All nodes serving the same model."""
-
+class Cluster(BaseModel):
     cluster_key: str
     model: ModelSpec
     node_ids: list[str]
 
 
-@dataclass
-class TaskRequest:
-    """A unit of work submitted from any node."""
-
-    task_id: str
-    submitted_by_node: str
-    task_type: TaskType
+class TaskRequest(BaseModel):
+    task_id: str = ""
+    submitted_by_node: str = ""
+    task_type: TaskType = TaskType.CHAT
     prompt: str
-    session_id: str | None  # attach to a shared context, if any
-    model_hint: str | None  # requested cluster_key, or None = router picks
-    max_output_tokens: int
+    session_id: str | None = None
+    model_hint: str | None = None  # cluster_key prefix match
+    max_output_tokens: int = 1024
     idempotency_key: str
-    created_at: datetime
+    created_at: datetime = Field(default_factory=utcnow)
+
+    def est_prompt_tokens(self) -> int:
+        return max(1, len(self.prompt) // 4)
 
 
-@dataclass
-class TaskAssignment:
-    """Router decision binding a task to exactly one node."""
-
+class TaskAssignment(BaseModel):
     task_id: str
-    attempt_id: str  # retries get fresh attempt ids
+    attempt_id: str
     node_id: str
     lease_expires_at: datetime
-    reason: str  # human-readable routing explanation
+    reason: str
 
 
-@dataclass
-class TaskResult:
+class TaskResult(BaseModel):
     task_id: str
     attempt_id: str
     state: TaskState
-    output: str | None
-    error: str | None
-    prompt_tokens: int | None
-    output_tokens: int | None
-    wall_time_s: float | None
+    output: str | None = None
+    error: str | None = None
+    prompt_tokens: int | None = None
+    output_tokens: int | None = None
+    wall_time_s: float | None = None
 
 
-@dataclass
-class Session:
-    """A conversation/work session whose context lives on the server node.
+class TaskView(BaseModel):
+    """Full task state as reported by the server API."""
 
-    Sessions are sticky to one node; migration within a cluster is allowed
-    but rare (vision dump: "should be done rarely if possible").
-    """
+    request: TaskRequest
+    state: TaskState
+    assigned_node: str | None = None
+    attempt_id: str | None = None
+    attempts: int = 0
+    result: TaskResult | None = None
+
+
+class Session(BaseModel):
+    """Post-MVP: server-held conversation context (see scheduler/sessions.py)."""
 
     session_id: str
     owner_node: str
     cluster_key: str
-    pinned_node: str | None  # current serving node
-    context_version: int  # monotonic, bumps on each appended turn
-    created_at: datetime
-    watchers: list[str] = field(default_factory=list)  # future: multi-user view
+    pinned_node: str | None = None
+    context_version: int = 0
+    created_at: datetime = Field(default_factory=utcnow)
+    watchers: list[str] = Field(default_factory=list)
 
 
-@dataclass
-class CronJob:
-    """A scheduled task. Requested by any node, runs only after op approval."""
+class CronJob(BaseModel):
+    """Post-MVP: op-approved scheduled task (see scheduler/cron.py)."""
 
     cron_id: str
     requested_by: str
-    approved_by: str | None  # op node id; None = pending
-    cron_expr: str  # standard 5-field cron expression
-    task_template: TaskRequest
-    enabled: bool
-    last_run_at: datetime | None
+    approved_by: str | None = None
+    cron_expr: str = ""
+    task_template: TaskRequest | None = None
+    enabled: bool = False
+    last_run_at: datetime | None = None
+
+
+def node_id_from_public_key(public_key_hex: str) -> str:
+    return hashlib.sha256(bytes.fromhex(public_key_hex)).hexdigest()[:16]

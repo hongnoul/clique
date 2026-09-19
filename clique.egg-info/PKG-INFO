@@ -1,0 +1,26 @@
+Metadata-Version: 2.4
+Name: clique
+Version: 0.0.1
+Summary: Locally shared AI models over LAN: every node is a dev environment and a model provider (spec-only scaffold)
+Requires-Python: >=3.12
+Requires-Dist: pydantic>=2
+Requires-Dist: fastapi
+Requires-Dist: uvicorn
+Requires-Dist: httpx
+Requires-Dist: websockets
+Requires-Dist: zeroconf
+Requires-Dist: psutil
+Requires-Dist: huggingface_hub
+Requires-Dist: dulwich
+Requires-Dist: apscheduler
+Requires-Dist: croniter
+Requires-Dist: typer
+Requires-Dist: rich
+Requires-Dist: textual
+Requires-Dist: pynacl
+Provides-Extra: nvidia
+Requires-Dist: nvidia-ml-py; extra == "nvidia"
+Provides-Extra: dev
+Requires-Dist: pytest; extra == "dev"
+Requires-Dist: pytest-asyncio; extra == "dev"
+Requires-Dist: ruff; extra == "dev"

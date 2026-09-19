@@ -80,3 +80,28 @@ git clone https://github.com/hongnoul/tcj
 cd tcj
 # TODO: add setup, run coordinator, join worker
 ```
+
+## MVP quickstart
+
+```bash
+uv venv && uv pip install -e .          # or: pip install -e .
+
+# terminal 1: server node (announces over mDNS)
+clique-server
+
+# terminal 2+: join devices. Echo runtime needs no model;
+# point --runtime openai-compat at ollama/llama-server for real inference.
+clique join --runtime echo --param-b 7 --name my-laptop
+clique join --runtime openai-compat --model-name qwen2.5-coder:7b --param-b 7
+
+# anywhere on the LAN
+clique nodes
+clique submit "write a fizzbuzz in rust"
+clique stats
+```
+
+Implemented: mDNS discovery, signed registration (first client node is op),
+heartbeats, durable sqlite queue, busyness- and size-aware routing (longer
+prompts to bigger models, one task per node), streaming results, retry on
+node loss, cancellation, idempotent submits, CLI. See SPEC.md for what is
+next (sessions, permissions UI, cron, vcs, dashboard).

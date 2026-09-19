@@ -1,80 +1,292 @@
-"""Router: allocate each submitted task to the appropriate node.
+"""Router (MVP implementation).
 
-Policy (implementation priority list, vision dump):
-- One task per node at a time.
-- Longer prompts go to bigger models.
-- Must consider how busy each node is.
-- Sessions are sticky to their pinned node; migration is a last resort.
+Policy per SPEC.md / vision dump:
+- one task per node at a time
+- longer prompts prefer bigger models (parameter_count_b, context fit)
+- busyness-aware: skip busy nodes, deprioritize loaded/battery nodes
+- explainable scoring: score() is pure and returns a reason string
 
-Follows ARCHITECTURE.MD §4: eligibility filter, then estimated
-completion scoring, with worker-confirmed reservations and leases.
-Heuristic and explainable, not globally optimal.
+Durability: task queue persisted in sqlite; leases expire and retry up
+to max_attempts; first committed result wins.
 """
 
 from __future__ import annotations
 
-from common.types import NodeInfo, TaskAssignment, TaskRequest, TaskResult
+import sqlite3
+import uuid
+from datetime import timedelta
+from pathlib import Path
+
+from common.errors import LeaseExpiredError
+from common.types import (
+    NodeInfo,
+    TaskAssignment,
+    TaskRequest,
+    TaskResult,
+    TaskState,
+    TaskView,
+    utcnow,
+)
+
+_SCHEMA = """
+CREATE TABLE IF NOT EXISTS tasks (
+    task_id TEXT PRIMARY KEY,
+    idempotency_key TEXT UNIQUE,
+    state TEXT NOT NULL,
+    request_json TEXT NOT NULL,
+    assigned_node TEXT,
+    attempt_id TEXT,
+    lease_expires_at TEXT,
+    attempts INTEGER DEFAULT 0,
+    result_json TEXT,
+    created_seq INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_tasks_state ON tasks(state);
+"""
 
 
 class Router:
-    def __init__(self, registry: "Registry", db: "Database") -> None: ...
+    def __init__(self, registry, db_path: Path | str, *,
+                 lease_seconds: float = 120.0, max_attempts: int = 3,
+                 queue_cap: int = 1000) -> None:
+        self.registry = registry
+        self.lease_seconds = lease_seconds
+        self.max_attempts = max_attempts
+        self.queue_cap = queue_cap
+        self._db = sqlite3.connect(str(db_path))
+        self._db.execute("PRAGMA journal_mode=WAL")
+        self._db.executescript(_SCHEMA)
+        self._db.commit()
+        self._seq = 0
 
-    async def submit(self, request: TaskRequest) -> str:
-        """Admit a task into the durable queue.
+    # -- submission -----------------------------------------------------------
 
-        Checks idempotency key (same key + equivalent payload = same
-        task), queue cap, and basic validity. Returns task_id. Admission
-        is persisted before acceptance is reported (§6)."""
-        ...
+    def submit(self, request: TaskRequest) -> str:
+        row = self._db.execute(
+            "SELECT task_id FROM tasks WHERE idempotency_key=?",
+            (request.idempotency_key,),
+        ).fetchone()
+        if row:
+            return row[0]  # idempotent resubmit
+        queued = self._db.execute(
+            "SELECT COUNT(*) FROM tasks WHERE state IN ('queued','assigned','running')"
+        ).fetchone()[0]
+        if queued >= self.queue_cap:
+            raise OverflowError("queue full")
+        request.task_id = request.task_id or f"t-{uuid.uuid4().hex[:12]}"
+        self._seq += 1
+        self._db.execute(
+            "INSERT INTO tasks(task_id, idempotency_key, state, request_json, created_seq)"
+            " VALUES (?,?,?,?,?)",
+            (request.task_id, request.idempotency_key, TaskState.QUEUED.value,
+             request.model_dump_json(), self._seq),
+        )
+        self._db.commit()
+        return request.task_id
 
-    async def schedule_pending(self) -> list[TaskAssignment]:
-        """Main loop step: match queued tasks to READY nodes.
+    # -- scoring ---------------------------------------------------------------
 
-        Step A eligibility: node READY, model compatible with
-        request.model_hint or task_type, prompt fits context window,
-        node not on battery (unless allowed), telemetry present or
-        conservative default applied.
+    @staticmethod
+    def score(request: TaskRequest, node: NodeInfo) -> tuple[float, str]:
+        """Pure scoring; higher is better. Returns (score, reason)."""
+        model = node.model
+        assert model is not None
+        reasons = []
+        prompt_tokens = request.est_prompt_tokens()
 
-        Step B scoring among eligible nodes:
-        - model_fit: longer prompts prefer clusters with larger
-          parameter_count_b and context_window.
-        - busyness: prefer idle-longest nodes; skip nodes whose recent
-          snapshots show pressure (cpu_percent, memory, battery).
-        - estimated completion: queue delay + prefill(prompt_len /
-          measured_prefill_tok_s) + max_output_tokens /
-          measured_decode_tok_s.
-        - session affinity: a task with session_id strongly prefers the
-          session's pinned node; migration only if pinned node is
-          OFFLINE/DRAINING (see sessions.py).
+        # hard-ish fit: prompt must fit context (leave room for output)
+        if prompt_tokens + request.max_output_tokens > model.context_window:
+            return (-1e9, "prompt exceeds context window")
 
-        Emits a reservation per assignment; the node must ACK before the
-        lease starts, else revoke and rescore.
-        """
-        ...
+        # model_hint: strong preference for matching cluster
+        score = 0.0
+        if request.model_hint:
+            if model.cluster_key().startswith(request.model_hint):
+                score += 1000.0
+                reasons.append(f"matches hint {request.model_hint}")
+            else:
+                score -= 500.0
+                reasons.append("does not match model hint")
 
-    def score(self, request: TaskRequest, node: NodeInfo) -> tuple[float, str]:
-        """Pure scoring function returning (score, human_reason). Kept
-        pure/deterministic for unit testing and dashboard explanation."""
-        ...
+        # longer prompts -> bigger models: weight model size by prompt length
+        length_factor = min(prompt_tokens / 1000.0, 4.0)
+        score += model.parameter_count_b * length_factor * 10.0
+        reasons.append(
+            f"size fit {model.parameter_count_b:g}B x len {prompt_tokens}tok")
 
-    async def on_result(self, result: TaskResult) -> None:
-        """Commit a result atomically: first valid result for a task
-        wins; stale/duplicate/lease-expired attempts are rejected
-        (LeaseExpiredError) and logged as wasted work. Update the node's
-        measured-throughput feedback (§4 Step D)."""
-        ...
+        # short prompts mildly prefer smaller models (keep big ones free)
+        if prompt_tokens < 250:
+            score -= model.parameter_count_b
+            reasons.append("short prompt: prefer smaller model")
 
-    async def on_node_lost(self, node_id: str) -> None:
-        """Requeue this node's in-flight task with a fresh attempt_id,
-        within its retry budget; else fail it."""
-        ...
+        # busyness: cpu load and battery
+        r = node.resources
+        if r is not None:
+            if r.cpu_percent is not None:
+                score -= r.cpu_percent * 0.5
+                reasons.append(f"cpu {r.cpu_percent:.0f}%")
+            if r.on_battery:
+                score -= 25.0
+                reasons.append("on battery")
+            if r.measured_decode_tok_s:
+                score += min(r.measured_decode_tok_s, 100.0) * 0.5
+                reasons.append(f"{r.measured_decode_tok_s:.0f} tok/s")
+        else:
+            score -= 10.0  # conservative when telemetry missing
+            reasons.append("no telemetry: conservative")
 
-    async def cancel(self, task_id: str, requested_by: str) -> bool:
-        """Cancel a task. Documented race winner: a commit that already
-        happened beats the cancel (ARCHITECTURE.MD §3)."""
-        ...
+        return score, "; ".join(reasons)
 
-    async def queue_stats(self) -> dict:
-        """Queue depth, per-cluster backlog, wait estimates. Feeds the
-        dashboard and the suggestion engine."""
-        ...
+    # -- scheduling --------------------------------------------------------------
+
+    def schedule_pending(self) -> list[tuple[TaskAssignment, TaskRequest]]:
+        """Match queued tasks to ready nodes. One task per node."""
+        ready = {n.node_id: n for n in self.registry.ready_nodes()}
+        # exclude nodes already holding an active assignment in our table
+        rows = self._db.execute(
+            "SELECT assigned_node FROM tasks WHERE state IN ('assigned','running')"
+            " AND assigned_node IS NOT NULL"
+        ).fetchall()
+        for (nid,) in rows:
+            ready.pop(nid, None)
+
+        out: list[tuple[TaskAssignment, TaskRequest]] = []
+        queued = self._db.execute(
+            "SELECT request_json FROM tasks WHERE state='queued' ORDER BY created_seq"
+        ).fetchall()
+        for (req_json,) in queued:
+            if not ready:
+                break
+            request = TaskRequest.model_validate_json(req_json)
+            scored = sorted(
+                ((self.score(request, n), n) for n in ready.values()),
+                key=lambda t: t[0][0], reverse=True,
+            )
+            (best_score, reason), best = scored[0]
+            if best_score <= -1e9:
+                continue  # no eligible node for this task; try next task
+            attempt_id = f"a-{uuid.uuid4().hex[:10]}"
+            lease = utcnow() + timedelta(seconds=self.lease_seconds)
+            self._db.execute(
+                "UPDATE tasks SET state='assigned', assigned_node=?, attempt_id=?,"
+                " lease_expires_at=?, attempts=attempts+1 WHERE task_id=?",
+                (best.node_id, attempt_id, lease.isoformat(), request.task_id),
+            )
+            self._db.commit()
+            del ready[best.node_id]
+            out.append((TaskAssignment(
+                task_id=request.task_id, attempt_id=attempt_id,
+                node_id=best.node_id, lease_expires_at=lease,
+                reason=reason,
+            ), request))
+        return out
+
+    def mark_running(self, task_id: str, attempt_id: str) -> None:
+        self._db.execute(
+            "UPDATE tasks SET state='running' WHERE task_id=? AND attempt_id=?"
+            " AND state='assigned'", (task_id, attempt_id))
+        self._db.commit()
+
+    # -- completion ---------------------------------------------------------------
+
+    def on_result(self, result: TaskResult) -> bool:
+        """Atomic commit: only the active attempt in a non-terminal state
+        may commit. Returns True if committed."""
+        row = self._db.execute(
+            "SELECT state, attempt_id, attempts FROM tasks WHERE task_id=?",
+            (result.task_id,),
+        ).fetchone()
+        if row is None:
+            return False
+        state, attempt_id, attempts = row
+        if state in ("succeeded", "failed", "cancelled", "expired"):
+            return False  # first result won already
+        if attempt_id != result.attempt_id:
+            raise LeaseExpiredError(
+                f"stale attempt {result.attempt_id} for task {result.task_id}")
+        if result.state == TaskState.FAILED and attempts < self.max_attempts:
+            # requeue for retry rather than committing failure
+            self._db.execute(
+                "UPDATE tasks SET state='queued', assigned_node=NULL, attempt_id=NULL,"
+                " lease_expires_at=NULL WHERE task_id=?", (result.task_id,))
+            self._db.commit()
+            return False
+        self._db.execute(
+            "UPDATE tasks SET state=?, result_json=? WHERE task_id=?",
+            (result.state.value, result.model_dump_json(), result.task_id),
+        )
+        self._db.commit()
+        return True
+
+    def on_node_lost(self, node_id: str) -> list[str]:
+        """Requeue (or fail) in-flight tasks of a lost node. Returns requeued ids."""
+        rows = self._db.execute(
+            "SELECT task_id, attempts FROM tasks WHERE assigned_node=?"
+            " AND state IN ('assigned','running')", (node_id,)
+        ).fetchall()
+        requeued = []
+        for task_id, attempts in rows:
+            if attempts >= self.max_attempts:
+                self._db.execute(
+                    "UPDATE tasks SET state='failed', result_json=? WHERE task_id=?",
+                    (TaskResult(task_id=task_id, attempt_id="", state=TaskState.FAILED,
+                                error="node lost; retry budget exhausted").model_dump_json(),
+                     task_id))
+            else:
+                self._db.execute(
+                    "UPDATE tasks SET state='queued', assigned_node=NULL, attempt_id=NULL,"
+                    " lease_expires_at=NULL WHERE task_id=?", (task_id,))
+                requeued.append(task_id)
+        self._db.commit()
+        return requeued
+
+    def expire_leases(self) -> list[str]:
+        """Requeue tasks whose lease expired (suspected failure)."""
+        now = utcnow().isoformat()
+        rows = self._db.execute(
+            "SELECT task_id, assigned_node FROM tasks WHERE state IN ('assigned','running')"
+            " AND lease_expires_at < ?", (now,)
+        ).fetchall()
+        requeued = []
+        for task_id, node_id in rows:
+            requeued.extend(self.on_node_lost(node_id))
+        return requeued
+
+    def cancel(self, task_id: str) -> bool:
+        cur = self._db.execute(
+            "UPDATE tasks SET state='cancelled' WHERE task_id=?"
+            " AND state IN ('queued','assigned','running')", (task_id,))
+        self._db.commit()
+        return cur.rowcount > 0
+
+    # -- views ------------------------------------------------------------------
+
+    def get_task(self, task_id: str) -> TaskView | None:
+        row = self._db.execute(
+            "SELECT request_json, state, assigned_node, attempt_id, attempts, result_json"
+            " FROM tasks WHERE task_id=?", (task_id,)
+        ).fetchone()
+        if row is None:
+            return None
+        req_json, state, node, attempt_id, attempts, result_json = row
+        return TaskView(
+            request=TaskRequest.model_validate_json(req_json),
+            state=TaskState(state), assigned_node=node, attempt_id=attempt_id,
+            attempts=attempts,
+            result=TaskResult.model_validate_json(result_json) if result_json else None,
+        )
+
+    def list_tasks(self, state: str | None = None, limit: int = 100) -> list[TaskView]:
+        q = "SELECT task_id FROM tasks"
+        args: tuple = ()
+        if state:
+            q += " WHERE state=?"
+            args = (state,)
+        q += " ORDER BY created_seq DESC LIMIT ?"
+        rows = self._db.execute(q, args + (limit,)).fetchall()
+        return [v for (tid,) in rows if (v := self.get_task(tid))]
+
+    def queue_stats(self) -> dict:
+        rows = self._db.execute(
+            "SELECT state, COUNT(*) FROM tasks GROUP BY state").fetchall()
+        return {"by_state": dict(rows)}

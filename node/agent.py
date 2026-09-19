@@ -1,76 +1,217 @@
-"""Node agent daemon: the process every device runs.
+"""Node agent daemon (MVP implementation).
 
-Lifecycle: discover clique -> register -> warm model -> heartbeat loop ->
-execute assigned tasks -> drain/leave. If no server node exists on the
-network, this node may become the server (see node/discovery.py).
-
-Runs headless (launchd/systemd) so monitor-less devices like the GX10
-are first-class; all interaction goes through client/cli.py.
+Registers with the server (discovered via mDNS or --server URL), opens
+the agent WebSocket, heartbeats, and executes assigned tasks on the
+local model runtime. One task at a time.
 """
 
 from __future__ import annotations
 
-from common.config import Config
-from common.types import NodeRole
+import asyncio
+import contextlib
+import logging
+import time
+
+import httpx
+import websockets
+
+from common import protocol
+from common.config import Config, generate_or_load_keypair, load
+from common.types import NodeStatus, TaskAssignment, TaskRequest, TaskResult, TaskState
+from node import resources as res
+from node.model_runtime import BaseRuntime, build_runtime, spec_from_config
+
+log = logging.getLogger("clique.agent")
 
 
 class NodeAgent:
-    """Long-running daemon for one node."""
+    def __init__(self, config: Config, server_url: str) -> None:
+        self.config = config
+        self.server_url = server_url.rstrip("/")
+        self.ws_url = self.server_url.replace("http", "ws", 1) + "/ws/agent"
+        self.runtime: BaseRuntime = build_runtime(
+            config.node.model_runtime,
+            config.node.openai_base_url,
+            config.node.openai_model_name,
+        )
+        self.model = spec_from_config(config.node)
+        self.node_id = ""
+        self.token = ""
+        self.current_task_id: str | None = None
+        self._stop = asyncio.Event()
+        self._task_job: asyncio.Task | None = None
+        self._ws = None
 
-    def __init__(self, config: Config) -> None: ...
+    # -------------------------------------------------------------- lifecycle
 
-    async def start(self) -> None:
-        """Boot the agent.
+    async def register(self) -> None:
+        pub, seed = generate_or_load_keypair(self.config.node.data_dir)
+        name = self.config.node.display_name
+        body = {
+            "display_name": name,
+            "public_key": pub,
+            "signature": protocol.sign_payload(name.encode(), seed),
+            "model": self.model.model_dump(mode="json"),
+            "resources": res.probe().model_dump(mode="json"),
+            "role": "client",
+        }
+        async with httpx.AsyncClient(timeout=10.0) as c:
+            r = await c.post(f"{self.server_url}/v1/register", json=body)
+            r.raise_for_status()
+            data = r.json()
+        self.node_id = data["node_id"]
+        self.token = data["token"]
+        log.info("registered as %s (%s, op=%s)", name, self.node_id, data["op_level"])
 
-        Steps:
-        1. Load/create keypair (common.config.generate_or_load_keypair).
-        2. Discover an existing server node via mDNS (node/discovery.py).
-        3. If none found and config permits, promote self to server
-           (spawn scheduler/server.py in-process) and announce.
-        4. Register with the server; receive node_id, token, op level,
-           and the default model spec if none configured.
-        5. Ensure model is downloaded and warm (node/model_runtime.py).
-        6. Start heartbeat loop and the task-execution listener.
-        """
-        ...
+    async def run(self) -> None:
+        if not await self.runtime.health():
+            raise SystemExit(
+                f"model runtime '{self.config.node.model_runtime}' not healthy "
+                f"({self.config.node.openai_base_url})")
+        await self.register()
+        backoff = 1.0
+        while not self._stop.is_set():
+            try:
+                async with websockets.connect(
+                        f"{self.ws_url}?token={self.token}", max_size=None) as ws:
+                    backoff = 1.0
+                    await self._session(ws)
+            except (OSError, websockets.WebSocketException) as e:
+                if self._stop.is_set():
+                    return
+                log.warning("connection lost (%s); retry in %.0fs", e, backoff)
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2, 30.0)
+                with contextlib.suppress(Exception):
+                    await self.register()  # token may be gone if server restarted
+
+    async def _session(self, ws) -> None:
+        self._ws = ws
+        hb = asyncio.create_task(self._heartbeat_loop(ws))
+        try:
+            async for raw in ws:
+                msg = protocol.loads(raw)
+                if msg["type"] == protocol.ASSIGN:
+                    assignment = TaskAssignment.model_validate(msg["assignment"])
+                    request = TaskRequest.model_validate(msg["request"])
+                    if self.current_task_id is not None:
+                        await ws.send(protocol.dumps(protocol.msg_result(TaskResult(
+                            task_id=assignment.task_id, attempt_id=assignment.attempt_id,
+                            state=TaskState.FAILED, error="node busy (race)"))))
+                        continue
+                    self.current_task_id = assignment.task_id
+                    self._task_job = asyncio.create_task(
+                        self._execute(ws, assignment, request))
+                elif msg["type"] == protocol.REVOKE:
+                    if msg["task_id"] == self.current_task_id:
+                        await self.runtime.cancel()
+        finally:
+            hb.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await hb
+
+    async def _execute(self, ws, assignment: TaskAssignment, request: TaskRequest) -> None:
+        start = time.monotonic()
+        chunks: list[str] = []
+        state, error = TaskState.SUCCEEDED, None
+        try:
+            offset = 0
+            async for delta in self.runtime.infer_stream(
+                    request.prompt, request.max_output_tokens):
+                chunks.append(delta)
+                await ws.send(protocol.dumps(protocol.msg_progress(
+                    assignment.task_id, assignment.attempt_id, offset, delta)))
+                offset += 1
+        except asyncio.CancelledError:
+            # abrupt kill: report nothing; the server's lease/heartbeat
+            # machinery will requeue this attempt elsewhere
+            self.current_task_id = None
+            raise
+        except Exception as e:
+            state, error = TaskState.FAILED, str(e)
+            log.warning("task %s failed: %s", assignment.task_id, e)
+        finally:
+            output = "".join(chunks)
+            result = TaskResult(
+                task_id=assignment.task_id, attempt_id=assignment.attempt_id,
+                state=state, output=output if state == TaskState.SUCCEEDED else None,
+                error=error, prompt_tokens=request.est_prompt_tokens(),
+                output_tokens=max(1, len(output) // 4),
+                wall_time_s=time.monotonic() - start)
+            with contextlib.suppress(Exception):
+                await ws.send(protocol.dumps(protocol.msg_result(result)))
+            self.current_task_id = None
+
+    async def _heartbeat_loop(self, ws) -> None:
+        while True:
+            status = NodeStatus.BUSY if self.current_task_id else NodeStatus.READY
+            await ws.send(protocol.dumps(protocol.msg_heartbeat(
+                status.value, res.probe(), self.current_task_id, self.model)))
+            await asyncio.sleep(self.config.node.heartbeat_interval_s)
 
     async def stop(self, drain: bool = True) -> None:
-        """Shut down.
+        self._stop.set()
+        if drain and self._task_job:
+            with contextlib.suppress(Exception):
+                await self._task_job
+        else:
+            await self.runtime.cancel()
 
-        With drain=True, finish the current task, send MsgLeave, then
-        stop. With drain=False, revoke immediately (task retried
-        elsewhere by the router).
-        """
-        ...
+    async def kill(self) -> None:
+        """Abrupt death (crash simulation / immediate quit): no drain,
+        no leave message, connection dropped mid-task."""
+        self._stop.set()
+        if self._task_job:
+            self._task_job.cancel()
+        await self.runtime.cancel()
+        if self._ws is not None:
+            with contextlib.suppress(Exception):
+                await self._ws.close()
 
-    async def role(self) -> NodeRole:
-        """Return whether this agent is currently server or client."""
-        ...
 
-    async def swap_model(self, model_ref: str) -> None:
-        """Owner-initiated model change (e.g. following a suggestion from
-        scheduler/suggestions.py).
-
-        Drains current task, unloads, downloads/loads new model, then
-        re-advertises via heartbeat so the registry moves this node to
-        the new cluster.
-        """
-        ...
-
-    async def pause(self) -> None:
-        """Owner reclaim: stop accepting tasks, keep model resident."""
-        ...
-
-    async def release_resources(self) -> None:
-        """Owner reclaim, stronger: unload model weights and KV memory.
-
-        Distinct from pause() per ARCHITECTURE.MD §2 (stopping generation
-        vs releasing memory must both be tested).
-        """
-        ...
+async def resolve_server(explicit: str | None, timeout_s: float = 5.0) -> str:
+    if explicit:
+        return explicit if explicit.startswith("http") else f"http://{explicit}"
+    from node.discovery import find_server
+    ann = await find_server(timeout_s=timeout_s)
+    if ann is None:
+        raise SystemExit("no clique server found on this network"
+                         " (start one with `clique-server` or pass --server)")
+    return f"http://{ann.api_address}"
 
 
 def main() -> None:
-    """CLI entrypoint: ``clique-agent`` (installed script). Parses config
-    path flag, sets up logging, runs NodeAgent under asyncio."""
-    ...
+    import argparse
+    parser = argparse.ArgumentParser("clique-agent")
+    parser.add_argument("--server", help="server URL (skip mDNS discovery)")
+    parser.add_argument("--name", help="override display name")
+    parser.add_argument("--runtime", choices=["echo", "openai-compat"])
+    parser.add_argument("--model-name", help="openai-compat model name, e.g. qwen2.5-coder:7b")
+    parser.add_argument("--param-b", type=float, help="model size in B params (routing)")
+    args = parser.parse_args()
+
+    logging.basicConfig(level=logging.INFO)
+    config = load()
+    if args.name:
+        config.node.display_name = args.name
+    if args.runtime:
+        config.node.model_runtime = args.runtime
+    if args.model_name:
+        config.node.openai_model_name = args.model_name
+        config.node.model_family = args.model_name.split(":")[0]
+    if args.param_b:
+        config.node.model_parameter_b = args.param_b
+
+    async def run() -> None:
+        server_url = await resolve_server(args.server)
+        agent = NodeAgent(config, server_url)
+        try:
+            await agent.run()
+        except KeyboardInterrupt:
+            await agent.stop()
+
+    asyncio.run(run())
+
+
+if __name__ == "__main__":
+    main()

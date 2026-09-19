@@ -1,0 +1,4 @@
+[console_scripts]
+clique = client.cli:main
+clique-agent = node.agent:main
+clique-server = scheduler.server:main
