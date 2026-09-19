@@ -4,6 +4,7 @@ Commands:
   clique serve                       run the server node here
   clique join [--server URL] ...     run an agent on this device
   clique nodes [--server URL]        list nodes and clusters
+  clique dash [--server URL]         live terminal dashboard (polls /dash.txt)
   clique submit PROMPT               submit a task and stream to done
   clique task TASK_ID [--cancel]     inspect or cancel a task
   clique stats                       queue and node stats
@@ -137,6 +138,36 @@ def task(task_id: str, server: str = typer.Option(None),
             console.print(await client.task(task_id))
 
     asyncio.run(run())
+
+
+@app.command()
+def dash(server: str = typer.Option(None),
+         once: bool = typer.Option(False, "--once",
+                                   help="print one snapshot and exit"),
+         interval: float = typer.Option(2.0, "--interval")) -> None:
+    """Live terminal dashboard (headless-friendly, polls the server)."""
+    import time
+    import urllib.request
+    client = _resolve(server)
+    base = client.base_url
+
+    def fetch(path: str) -> str:
+        try:
+            with urllib.request.urlopen(base + path, timeout=5) as r:
+                return r.read().decode()
+        except Exception as e:
+            return f"{path}: unreachable ({e})"
+
+    if once:
+        console.print(fetch("/dash.txt"))
+        return
+    try:
+        while True:
+            console.clear() if hasattr(console, "clear") else None
+            console.print(fetch("/dash.txt"))
+            time.sleep(interval)
+    except KeyboardInterrupt:
+        pass
 
 
 @app.command()

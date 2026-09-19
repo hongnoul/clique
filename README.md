@@ -98,6 +98,30 @@ clique join --runtime openai-compat --model-name qwen2.5-coder:7b --param-b 7
 clique nodes
 clique submit "write a fizzbuzz in rust"
 clique stats
+clique dash --server http://<server-ip>:7777   # live terminal dashboard
+```
+
+### Headless access: zero-install curl flow
+
+For monitor-less nodes (GX10 over SSH) with no install yet, the server
+itself serves everything as plain text. Pick the lightest option that works:
+
+```bash
+export CLIQUE=http://<server-ip>:7777
+curl -s $CLIQUE/               # prints this menu
+curl -s $CLIQUE/dash.txt       # snapshot, curl only, no python needed
+watch -n 2 curl -s $CLIQUE/dash.txt   # live loop, curl + watch only
+
+# live fullscreen TUI, stdlib-only (no pip, no clone):
+curl -fsSL $CLIQUE/tui.py -o /tmp/clique-tui.py
+python3 /tmp/clique-tui.py --server $CLIQUE
+
+# one-liner into python3, or snapshot-once mode for pipes/cron:
+curl -fsSL $CLIQUE/tui.py | python3 - --server $CLIQUE
+curl -fsSL $CLIQUE/tui.py | python3 - --server $CLIQUE --once
+
+# full CLI install (pinned to that server):
+curl -fsSL $CLIQUE/join.sh | sh
 ```
 
 Implemented: mDNS discovery, signed registration (first client node is op),
