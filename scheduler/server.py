@@ -246,6 +246,12 @@ class SchedulerServer:
             return (Path(__file__).resolve().parents[1] / "client"
                     / "curl_tui.py").read_text()
 
+        @app.get("/join", response_class=PlainTextResponse)
+        async def join_page(request: Request) -> str:
+            """Join page (spec: rest.py join assets): menu + one-liner."""
+            # Alias of / with the spec'd path so /join works as documented.
+            return await index_txt(request)
+
         @app.get("/join.sh", response_class=PlainTextResponse)
         async def join_sh(request: Request) -> str:
             """One-line full CLI installer pinned to this server."""

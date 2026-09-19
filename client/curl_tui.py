@@ -116,9 +116,8 @@ def render_lines(snap: dict, width: int = 100) -> list[str]:
 
 
 def plain_loop(base: str, interval: float, once: bool) -> int:
-    snap = snapshot(base)
     if once:
-        print("\n".join(render_lines(snap)))
+        print("\n".join(render_lines(snapshot(base))))
         return 0
     try:
         while True:
@@ -137,27 +136,10 @@ def curses_loop(base: str, interval: float) -> int:
     import curses
 
     def _main(stdscr) -> None:
-        stdscr.nodelay(True)
         stdscr.timeout(int(interval * 1000))
-        force = True
-        snap: dict = {}
-        lines: list[str] = ["connecting..."]
+        snap = snapshot(base)  # render immediately, no blank first tick
         while True:
-            if force:
-                snap = snapshot(base)
-                force = False
-            try:
-                key = stdscr.getch()
-            except Exception:
-                key = -1
-            if key in (ord("q"), ord("Q"), 27):
-                return
-            if key in (ord("r"), ord("R")):
-                snap = snapshot(base)
             h, w = stdscr.getmaxyx()
-            # refresh data each tick even without keypress
-            if key == -1:
-                snap = snapshot(base)
             lines = render_lines(snap, width=max(40, w - 1))
             header = f"clique TUI -- {base}  {time.strftime('%H:%M:%S')}  refresh {interval}s"
             stdscr.erase()
@@ -168,6 +150,13 @@ def curses_loop(base: str, interval: float) -> int:
             except Exception:
                 pass
             stdscr.refresh()
+            try:
+                key = stdscr.getch()  # blocks up to interval; -1 on tick
+            except Exception:
+                key = -1
+            if key in (ord("q"), ord("Q"), 27):
+                return
+            snap = snapshot(base)  # one fetch per tick or keypress
 
     curses.wrapper(_main)
     return 0
