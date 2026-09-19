@@ -2,7 +2,7 @@
 name = "clique"
 version = "0.0.1"
 description = "Locally shared AI models over LAN: every node is a dev environment and a model provider (spec-only scaffold)"
-requires-python = ">=3.12"
+requires-python = ">=3.11"
 dependencies = [
     "pydantic>=2",
     "fastapi",

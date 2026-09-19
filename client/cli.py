@@ -43,7 +43,7 @@ def serve() -> None:
 
 @app.command()
 def join(server: str = typer.Option(None, help="server URL, skips mDNS"),
-         name: str = typer.Option(None),
+         name: str = typer.Option(None, help="display name, defaults to hostname"),
          runtime: str = typer.Option(None, help="echo | openai-compat"),
          model_name: str = typer.Option(None, help="e.g. qwen2.5-coder:7b"),
          param_b: float = typer.Option(None, help="model size in B params")) -> None:

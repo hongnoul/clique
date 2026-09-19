@@ -105,3 +105,22 @@ heartbeats, durable sqlite queue, busyness- and size-aware routing (longer
 prompts to bigger models, one task per node), streaming results, retry on
 node loss, cancellation, idempotent submits, CLI. See SPEC.md for what is
 next (sessions, permissions UI, cron, vcs, dashboard).
+
+### Joining on enterprise Wi-Fi (eduroam, MIT SECURE, etc.)
+
+Enterprise networks block mDNS, so always pass `--server` explicitly:
+
+```bash
+clique join --server http://<server-ip>:7777 --runtime echo --param-b 7
+```
+
+If `curl http://<server-ip>:7777/v1/clique` times out, the network isolates
+clients from each other. Use a hotspot instead: the server machine (or a
+phone) opens a hotspot, everyone joins it, and the server IP is typically
+`192.168.2.1` (Mac Internet Sharing) or the phone's gateway IP.
+
+One-line install on a new device:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/hongnoul/tcj/main/scripts/bootstrap.sh | sh
+```
