@@ -37,7 +37,7 @@ class SuggestionEngine:
           cluster's model footprint (can it actually fit the model?).
 
         Emit swap_model when an underused node fits an overloaded
-        cluster's model. Hysteresis per ARCHITECTURE.MD §4 Step D: do not
+        cluster's model. Hysteresis: do not
         flip-flop suggestions on transient spikes (minimum observation
         window, separate enter/exit thresholds)."""
         ...

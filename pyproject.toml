@@ -45,4 +45,4 @@ packages = [
 ]
 
 [tool.uv]
-# managed with uv (matches ARCHITECTURE.MD worker-agent tooling choice)
+# managed with uv for fast iteration

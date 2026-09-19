@@ -4,7 +4,7 @@
 
 Status: target for HackMIT 2026. This is a goal to prove, not a result already measured.
 
-This README restates [vision.md](vision.md). Details: [Vision](vision.md) · [Scheduler architecture](ARCHITECTURE.MD) · [Research](research/README.md).
+Details: [Spec](SPEC.md).
 
 ## The product in one paragraph
 
@@ -32,15 +32,15 @@ Single request speed does not improve by adding replicas. Claim throughput and a
 
 ## Starting fleet
 
-The network starts with 5 team laptops: 3 Macs plus 2 Arch or NVIDIA machines, each running one Qwen2.5-Coder-7B Q4 replica. No per token network hop. Throughput numbers in [vision.md](vision.md) are projections to verify, not measured results.
+The network starts with 5 team laptops: 3 Macs plus 2 Arch or NVIDIA machines, each running one Qwen2.5-Coder-7B Q4 replica. No per token network hop. Throughput numbers below are projections to verify, not measured results.
 
-Primary model: Qwen2.5-Coder-7B-Instruct Q4, 1 node per replica, 5 replicas. Stretch: Qwen3-30B-A3B MoE Q4, DeepSeek-Coder-V2-Lite 16B, Qwen2.5-Coder-32B, Llama-3.3-70B across 2 to 4 nodes. See [vision.md](vision.md) for the full model plan.
+Primary model: Qwen2.5-Coder-7B-Instruct Q4, 1 node per replica, 5 replicas. Stretch: Qwen3-30B-A3B MoE Q4, DeepSeek-Coder-V2-Lite 16B, Qwen2.5-Coder-32B, Llama-3.3-70B across 2 to 4 nodes.
 
 ## The money goal
 
 Fixed sponsored rate: **$0.20 per accepted coding task** on the 7B primary model. Sponsor pool **$50** lasts a 3 hour demo at 60 to 100 accepted tasks per hour. Monthly projection is about **$200 per month per laptop** at 4 tasks per hour over 8 idle hours per night. Display as run rate projection, not cash earnings, until payout consent and settlement handling are established.
 
-Early and loyal nodes earn a boost from a separate $25 bonus pool: 2x for the first 10 nodes, 1.5x for the next 20, loyalty up to 1.5x, plus $0.05 per task for zero-drop hours. See [vision.md](vision.md) for the exact curve.
+Early and loyal nodes earn a boost from a separate $25 bonus pool: 2x for the first 10 nodes, 1.5x for the next 20, loyalty up to 1.5x, plus $0.05 per task for zero-drop hours.
 
 ## Anyone at HackMIT can join live
 
@@ -64,13 +64,11 @@ Keep the durable ledger, fair queue, recovery, and fixed rate settlement. Add pi
 
 ```text
 tcj/
-  README.md          # this file, restatement of vision.md
-  vision.md          # full vision with throughput and money math
-  ARCHITECTURE.MD    # scheduler and node-capacity protocol
-  research/          # parallelism, frameworks, DGX Spark, architecture recommendation
-  client/            # TODO: consumer API client
-  scheduler/         # TODO: API, admission, scheduler, ledger
-  node/              # TODO: capacity agent, inference backend
+  README.md          # this file: product, money goal, quickstart
+  SPEC.md            # implementation spec
+  client/            # consumer API client, CLI, curl TUI
+  scheduler/         # API, admission, scheduler, ledger
+  node/              # capacity agent, inference backend
 ```
 
 ## Getting started
