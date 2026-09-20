@@ -58,6 +58,9 @@ flowchart TB
 | `scheduler/permissions.py` | Op model: first client node is op, /op grant/revoke, policy modes. |
 | `scheduler/cron.py` | Cron jobs requested by any node, approved by an op. |
 | `scheduler/vcs.py` | Git-backed version control of the shared server DB. |
+| `scheduler/workspace.py` | Live realtime workspaces: sequenced in-memory patches, rebase, debounced git checkpoints, rehydrate. |
+| `scheduler/workspaces.py` | Ephemeral per-task CODE_EDIT checkouts: seed, apply diff, run tests. |
+| `scheduler/api/workspace_routes.py` | `/ws/workspace/{id}` realtime collab + `/v1/workspaces` REST (history, commits, flush). |
 | `scheduler/suggestions.py` | Detect overloaded task types/nodes, suggest model changes. |
 | `scheduler/api/rest.py` | HTTP API route specs. |
 | `scheduler/api/ws.py` | WebSocket event stream specs (dashboard, session watch). |
