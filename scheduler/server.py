@@ -168,11 +168,11 @@ main() {
     "$BIN_DIR/clique" --help >/dev/null 2>&1 || err "install check failed ('clique --help')"
 
     echo ""
-    log "ready. run 'clique onboard --server $CLIQUE_SERVER' to join."
+    log "ready. run 'clique' and press Join (or Host to start a server)."
     echo ""
-    echo "  check first:  clique onboard --server $CLIQUE_SERVER --dry"
-    echo "  join:         clique onboard --server $CLIQUE_SERVER"
-    echo "  (or manual:  clique join --server $CLIQUE_SERVER --runtime echo --param-b 7)"
+    echo "  one step:   export CLIQUE_SERVER=$CLIQUE_SERVER"
+    echo "              clique            # buttons: Host Join Chat Dashboard"
+    echo "  (headless:  clique join --server $CLIQUE_SERVER --runtime echo --param-b 7)"
     echo ""
 }
 
@@ -451,10 +451,11 @@ class SchedulerServer:
             return (
                 f"join this clique (one line, no token needed):\n"
                 f"  curl -fsSL {base}/join.sh | sh\n"
-                f"then onboard gracefully (probes server, detects runtime):\n"
+                f"then one step (buttons, no scripts):\n"
                 f"  export CLIQUE_SERVER={base}\n"
-                f"  clique onboard --dry   # check first\n"
-                f"  clique onboard         # join with detected runtime\n"
+                f"  clique              # Host Join Chat Dashboard buttons\n"
+                f"or headless (no buttons):\n"
+                f"  clique join --server {base} --runtime echo --param-b 7\n"
                 f"or without installing anything:\n"
                 f"  curl -fsSL {base}/tui.py | python3 - --server "
                 f"{base}\n"

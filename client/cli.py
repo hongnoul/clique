@@ -30,8 +30,29 @@ from rich.table import Table
 
 from client.sdk import CliqueClient
 
-app = typer.Typer(no_args_is_help=True, add_completion=False)
+app = typer.Typer(no_args_is_help=False, add_completion=False,
+                   invoke_without_command=True)
 console = Console()
+
+
+@app.callback()
+def _home_default(ctx: typer.Context,
+                  server: str = typer.Option(
+                      None, "--server",
+                      help="server URL for the home screen")) -> None:
+    """Seamless home: `clique` with no command opens the button TUI."""
+    if ctx.invoked_subcommand is None:
+        from client.home import main as home_main
+        home_main(server)
+        raise typer.Exit(0)
+
+
+@app.command()
+def ui(server: str = typer.Option(
+        None, help="server URL (or $CLIQUE_SERVER)")) -> None:
+    """Open the seamless home screen: Host / Join / Chat / Dashboard."""
+    from client.home import main as home_main
+    home_main(server)
 
 
 def _resolve(server: str | None) -> CliqueClient:

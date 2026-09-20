@@ -79,7 +79,7 @@ async def afetch(base: str, path: str) -> tuple[str, str]:
 async def test_index_menu_lists_all_flows(headless_server):
     body, _ = await afetch(headless_server, "/")
     for needle in ("/dash.txt", "/tui.py", "/join.sh", "/repo.bundle",
-                   "clique onboard --dry"):
+                   "clique              # Host Join Chat Dashboard buttons"):
         assert needle in body, f"menu missing {needle}"
     # no-GitHub flow: join needs no PAT, source comes from /app.tgz
     assert "no token needed" in body
@@ -118,7 +118,7 @@ async def test_join_sh_pins_server(headless_server, tmp_path):
     assert headless_server in body
     # no-GitHub flow: bundle comes from /app.tgz, no git prompts or PATs
     assert "app.tgz" in body
-    assert "clique onboard" in body  # graceful path advertised after install
+    assert "press Join" in body  # seamless home advertised after install
     assert "CLIQUE_GITHUB_TOKEN" not in body
     assert "GIT_TERMINAL_PROMPT" not in body
     assert body.startswith("#!/bin/sh")
@@ -477,3 +477,52 @@ async def test_repo_bundle_roundtrips_through_git(headless_server, tmp_path):
         capture_output=True, text=True, timeout=60)
     assert proc.returncode == 0, proc.stderr
     assert (tmp_path / "tclone" / "pyproject.toml").exists()
+
+
+def test_home_normalize_server():
+    from client.home import normalize_server
+
+    assert normalize_server(None) == "http://127.0.0.1:7777"
+    assert normalize_server("100.83.233.124:7777") == "http://100.83.233.124:7777"
+    assert normalize_server(" http://x:1/ ") == "http://x:1"
+
+
+async def test_home_app_boots_headless():
+    """Home screen boots in pilot mode: 7 buttons, 2 inputs, graceful status."""
+    from textual.widgets import Button, Input, Static
+
+    from client.home import HomeApp
+
+    app = HomeApp.build()("http://127.0.0.1:1")
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert sorted(b.id for b in app.query(Button)) == [
+            "dash", "host", "join", "leave", "refresh", "send", "stop"]
+        assert sorted(i.id for i in app.query(Input)) == ["prompt", "server"]
+        await app.refresh_all()
+        assert "not reachable" in str(app.query_one("#status", Static).content)
+
+
+async def test_home_join_button_reports_unreachable():
+    """Join against nothing listening: button shows error, no crash."""
+    from textual.widgets import Static
+
+    from client.home import HomeApp
+
+    app = HomeApp.build()("http://127.0.0.1:1")
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        await app._run_join()
+        assert "unreachable" in str(app.query_one("#msg", Static).content)
+        await app._run_dash()  # flags handoff to dashboard, exits home
+        assert app._next == "dash"
+
+
+def test_ui_command_registered():
+    from typer.testing import CliRunner
+
+    from client.cli import app
+
+    result = CliRunner().invoke(app, ["ui", "--help"])
+    assert result.exit_code == 0, result.output
+    assert "Host / Join" in result.output
