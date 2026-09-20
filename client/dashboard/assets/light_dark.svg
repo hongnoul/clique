@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg id="Layer_2" data-name="Layer 2" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 1024">
+  <polygon fill="currentColor" points="640 75.36 736.43 224.38 902.04 160.51 892.47 337.75 1063.99 383.41 952.07 521.18 1063.99 658.94 892.47 704.61 902.04 881.85 736.43 817.97 640 966.99 543.57 817.97 377.96 881.85 387.53 704.61 216.01 658.94 327.93 521.18 216.01 383.41 387.53 337.75 377.96 160.51 543.57 224.38 640 75.36"/>
+  <circle cx="640" cy="521.18" r="251.86" fill="var(--card-bg, #f2f2f2)"/>
+  <rect fill="currentColor" x="640" y="239.91" width="52.54" height="549.1"/>
+  <rect fill="currentColor" x="684.48" y="255.36" width="52.54" height="518.22"/>
+  <rect fill="currentColor" x="728.48" y="269.31" width="52.54" height="504.26"/>
+  <rect fill="currentColor" x="770.48" y="269.31" width="52.54" height="504.26"/>
+  <rect fill="currentColor" x="816.96" y="293.24" width="52.54" height="504.26"/>
+  <rect fill="currentColor" x="856.48" y="391.25" width="52.54" height="255.72"/>
+</svg>
