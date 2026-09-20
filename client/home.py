@@ -340,8 +340,7 @@ class HomeApp:
                     node_line = "node: not joined"
                 extra = ""
                 if isinstance(remote, dict) and remote.get("name"):
-                    extra = (f"  clique={remote.get('name')} "
-                             f"policy={remote.get('policy', '?')}")
+                    extra = f"  clique={remote.get('name')}"
                 box.update(f"{srv_line}\n{node_line}{extra}")
 
             def say(self, text: str) -> None:

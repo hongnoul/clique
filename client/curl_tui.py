@@ -80,7 +80,7 @@ def render_lines(snap: dict, width: int = 100,
     cl = snap.get("clique") or {}
     if isinstance(cl, dict) and not cl.get("_error"):
         L.append(
-            f"clique: {cl.get('name', '?')}  policy={cl.get('policy', '?')}  "
+            f"clique: {cl.get('name', '?')}  "
             f"default_model={cl.get('default_model', '?')}"
         )
     else:
