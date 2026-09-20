@@ -236,22 +236,41 @@ async def _execute_agentic(ws, runtime: BaseRuntime,
     tools = _as_openai_tools(request.tools)
     transcript: list[dict] = _as_openai_messages(
         request.prompt, request.messages)
-    # Nudge text-only models toward the fallback shape the parser
-    # catches ({"action": name, "arguments": {...}}).
+    # Nudge text-only models toward shapes the parser catches.
+    # Show the exact literal: small models copy examples, not schemas.
     names = [t.name for t in (request.tools or [])]
+    first = names[0] if names else "clique_self_assess"
     transcript[0]["content"] = (
         transcript[0].get("content", "")
         + "\nYou have tools: " + ", ".join(names) + ". "
-        "To use one, reply with ONLY a JSON object "
-        '{"action": "<name>", "arguments": {...}} and nothing else. '
+        "To call one, reply with ONLY this exact text and nothing else:\n"
+        f"<tool_call><function={first}></function></tool_call>\n"
+        "(replace the function name for other tools; put JSON arguments "
+        "between the tags when needed). "
         "Results come back as a tool message; then continue. "
-        "If you cannot call a tool, reply with your answer as text.")
+        "Do not explain, do not narrate, emit only the call.")
     final_content = ""
+    repaired = False
     for rnd in range(AGENTIC_MAX_ROUNDS):
         content, calls = await runtime.infer_tools(
             transcript, tools, request.tool_choice,
             request.max_output_tokens)
         if not calls:
+            # One repair round: small models often narrate ("I will call
+            # X...") on round 0 instead of emitting the call. Show them
+            # the miss explicitly and demand the literal once.
+            if not repaired and content and len(content) > 40:
+                repaired = True
+                transcript.append({
+                    "role": "assistant", "content": content})
+                transcript.append({
+                    "role": "user",
+                    "content": "No tool was called. Reply again with ONLY "
+                    f"this exact text:\n<tool_call><function={first}>"
+                    "</function></tool_call>"})
+                await _send(ws, assignment, progress_cb, 0,
+                            "[no call detected, retrying] ")
+                continue
             final_content = content
             if content:
                 await _send(ws, assignment, progress_cb, 0,

@@ -276,3 +276,23 @@ async def test_fallback_xml_tool_call_shape():
                        "<function=clique_self_assess>\n</function>\n</tool_call>\n"}}]})
     assert content == "" and calls[0].name == "clique_self_assess"
     assert calls[0].arguments == {}
+
+
+@pytest.mark.asyncio
+async def test_agentic_repair_round_recovers_narration():
+    # round 0 narrates (no call) -> repair round -> real call -> answer
+    from common.types import ToolCall
+    rt = ScriptToolsRuntime([
+        ("I will now call the tool, it assesses the system health.", []),
+        ("", [ToolCall(call_id="c1", name="clique_self_assess",
+                       arguments={})]),
+        ("sha abc123", []),
+    ])
+    seen: list = []
+
+    async def fake_call(name, args):
+        seen.append(name)
+        return True, '{"sha": "abc123"}'
+    out = await execute(None, rt, _asgn(), _agentic_req(),
+                        progress_cb=lambda t: None, call_tool=fake_call)
+    assert out == "sha abc123" and seen == ["clique_self_assess"]
