@@ -395,6 +395,70 @@ async def test_openai_compat_streaming(clique):
     assert "stream me" in "".join(chunks)
 
 
+@pytest.mark.asyncio
+async def test_openai_compat_reasoning_split_nonstream(clique):
+    """A complete output containing ``</think>`` is split: content is
+    clean, chain-of-thought moves to message.reasoning_content."""
+    base, _, _ = clique
+    async with httpx.AsyncClient(timeout=30.0) as c:
+        r = await c.post(base + "/v1/chat/completions", json={
+            "model": "clique",
+            "messages": [{"role": "user",
+                          "content": "ponder</think> final-answer"}],
+        })
+        r.raise_for_status()
+        msg = r.json()["choices"][0]["message"]
+    assert "</think>" not in msg["content"]
+    assert "final-answer" in msg["content"]
+    assert "ponder" in msg.get("reasoning_content", "")
+
+
+@pytest.mark.asyncio
+async def test_openai_compat_streaming_contract(clique):
+    """Streaming: task-id header present, think tags never leak into
+    content deltas, terminal chunk carries a finish_reason."""
+    base, _, _ = clique
+    content, reasoning, finish = [], [], None
+    async with httpx.AsyncClient(timeout=30.0) as c:
+        async with c.stream("POST", base + "/v1/chat/completions", json={
+            "messages": [{"role": "user",
+                          "content": "mull</think> streamed-answer"}],
+            "stream": True,
+        }) as r:
+            r.raise_for_status()
+            assert r.headers.get("x-clique-task-id", "").startswith("t-")
+            async for line in r.aiter_lines():
+                if not line.startswith("data: "):
+                    continue
+                payload = line[6:]
+                if payload == "[DONE]":
+                    break
+                choice = json.loads(payload)["choices"][0]
+                delta = choice["delta"]
+                content.append(delta.get("content", ""))
+                reasoning.append(delta.get("reasoning_content", ""))
+                if choice.get("finish_reason"):
+                    finish = choice["finish_reason"]
+    joined_content = "".join(content)
+    assert finish in ("stop", "length")
+    assert "</think>" not in joined_content
+    assert "<think>" not in joined_content
+    assert "streamed-answer" in joined_content + "".join(reasoning)
+
+
+@pytest.mark.asyncio
+async def test_openai_compat_models_endpoint(clique):
+    base, _, _ = clique
+    async with httpx.AsyncClient(timeout=10.0) as c:
+        r = await c.get(base + "/v1/models")
+        r.raise_for_status()
+        data = r.json()
+    assert data["object"] == "list"
+    ids = [m["id"] for m in data["data"]]
+    assert "clique" in ids
+    assert any("echo" in mid for mid in ids)
+
+
 # -------------------------------------------------------------------- web dash
 
 
