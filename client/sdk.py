@@ -19,6 +19,7 @@ class CliqueClient:
         self._timeout = timeout_s
         self.token = token
         self.node_id: str | None = None
+        self._data_dir: Path | None = None
 
     @classmethod
     async def discover(cls, timeout_s: float = 5.0) -> "CliqueClient":
@@ -28,26 +29,49 @@ class CliqueClient:
             raise ConnectionError("no clique server found on this network")
         return cls(f"http://{ann.api_address}")
 
+    async def _authed_request(self, method: str, path: str,
+                              body: dict | None = None,
+                              **params) -> dict | list:
+        """One request with silent re-auth on 401 (server restart).
+
+        The server keeps tokens in memory only, so a restart invalidates
+        every cached token. On 401 this drops the stale cache, registers
+        fresh exactly once, and retries. The caller never sees the 401.
+        """
+        async def _once() -> "httpx.Response":
+            import httpx as _httpx
+            async with _httpx.AsyncClient(timeout=self._timeout) as c:
+                fn = {"GET": c.get, "POST": c.post,
+                      "DELETE": c.delete}[method]
+                kw: dict = {"headers": self._headers()}
+                if method == "GET":
+                    kw["params"] = params or None
+                elif method == "POST":
+                    kw["json"] = body
+                return await fn(f"{self.base_url}{path}", **kw)
+
+        r = await _once()
+        if (r.status_code == 401 and self.token
+                and not path == "/v1/register"):
+            self.token = None  # force fresh register, ignore stale cache
+            try:
+                if self._data_dir is not None:
+                    (self._data_dir / "node.token").unlink(missing_ok=True)
+            except Exception:
+                pass
+            await self.authenticate(self._data_dir)
+            r = await _once()
+        r.raise_for_status()
+        return r.json()
+
     async def _get(self, path: str, **params) -> dict | list:
-        async with httpx.AsyncClient(timeout=self._timeout) as c:
-            r = await c.get(f"{self.base_url}{path}", params=params or None,
-                            headers=self._headers())
-            r.raise_for_status()
-            return r.json()
+        return await self._authed_request("GET", path, **params)
 
     async def _post(self, path: str, body: dict | None = None) -> dict:
-        async with httpx.AsyncClient(timeout=self._timeout) as c:
-            r = await c.post(f"{self.base_url}{path}", json=body,
-                             headers=self._headers())
-            r.raise_for_status()
-            return r.json()
+        return await self._authed_request("POST", path, body)  # type: ignore[return-value]
 
     async def _delete(self, path: str) -> dict:
-        async with httpx.AsyncClient(timeout=self._timeout) as c:
-            r = await c.delete(f"{self.base_url}{path}",
-                               headers=self._headers())
-            r.raise_for_status()
-            return r.json()
+        return await self._authed_request("DELETE", path)  # type: ignore[return-value]
 
     def _headers(self) -> dict:
         return {"Authorization": f"Bearer {self.token}"} if self.token else {}
@@ -65,6 +89,7 @@ class CliqueClient:
         from common.config import DEFAULT_DIR, generate_or_load_keypair
         import socket
         d = data_dir or DEFAULT_DIR
+        self._data_dir = d
         cache = d / "node.token"
         if self.token is None and cache.exists():
             try:
