@@ -14,6 +14,7 @@ subprocess with timeout.
 from __future__ import annotations
 
 import logging
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -22,6 +23,76 @@ from common.errors import CliqueError
 from common.types import CodeTaskSpec
 
 log = logging.getLogger("clique.workspaces")
+
+_GOOD_HUNK_RE = re.compile(r"^@@ -\d")
+
+
+def _normalize_hunk_headers(ws: Path, diff: str) -> str:
+    """Fill in line ranges for bare ``@@`` hunk headers.
+
+    Models routinely emit ``@@`` with no ``-start,len +start,len``
+    ranges; GNU patch(1) rejects that as garbage even though the hunk
+    body is fine. Locate each bare hunk's old-side lines in the target
+    file and rewrite the header. Well-formed headers pass through
+    untouched; unlocatable hunks are left for patch(1) to report.
+    """
+    lines = diff.splitlines()
+    out: list[str] = []
+    i = 0
+    file_lines: list[str] = []
+    search_from = 0
+    delta = 0
+    while i < len(lines):
+        line = lines[i]
+        if line.startswith("+++ "):
+            path = line[4:].strip()
+            rel = path.split("/", 1)[1] if "/" in path else path  # -p1
+            target = ws / rel
+            file_lines = (target.read_text().splitlines()
+                          if target.is_file() else [])
+            search_from, delta = 0, 0
+            out.append(line)
+            i += 1
+            continue
+        if line.startswith("@@") and not _GOOD_HUNK_RE.match(line):
+            j = i + 1
+            body: list[str] = []
+            while j < len(lines) and not lines[j].startswith(
+                    ("@@", "--- ", "+++ ", "diff ")):
+                # blank line inside a hunk is a context line whose
+                # trailing space got stripped
+                body.append(lines[j] if lines[j] else " ")
+                j += 1
+            while body and body[-1] == " " and j >= len(lines):
+                body.pop()  # trailing blank(s) after the last hunk
+            old_side = [b[1:] for b in body if b[:1] in (" ", "-")]
+            n = len(old_side)
+            pos = -1
+            if n == 0:
+                old_start, old_len = 0, 0
+                new_start = 1 + delta
+            else:
+                for k in range(search_from, len(file_lines) - n + 1):
+                    if file_lines[k:k + n] == old_side:
+                        pos = k
+                        break
+                if pos < 0:
+                    out.append(line)
+                    i += 1
+                    continue
+                old_start, old_len = pos + 1, n
+                new_start = old_start + delta
+            new_len = sum(1 for b in body if b[:1] in (" ", "+"))
+            delta += new_len - old_len
+            if pos >= 0:
+                search_from = pos + n
+            out.append(f"@@ -{old_start},{old_len} +{new_start},{new_len} @@")
+            out.extend(body)
+            i = j
+            continue
+        out.append(line)
+        i += 1
+    return "\n".join(out) + "\n"
 
 
 class WorkspaceError(CliqueError):
@@ -58,6 +129,7 @@ class WorkspaceManager:
         ws = self.path_for(task_id)
         if not ws.exists():
             raise WorkspaceError("no_workspace")
+        diff = _normalize_hunk_headers(ws, diff)
         patch_file = ws / ".harness.patch"
         patch_file.write_text(diff)
         # Prefer system patch(1) dry-run then apply; fallback to minimal applier.
