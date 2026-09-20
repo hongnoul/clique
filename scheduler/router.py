@@ -23,11 +23,13 @@ from pathlib import Path
 
 from common.errors import LeaseExpiredError
 from common.types import (
+    ChatMessage,
     NodeInfo,
     TaskAssignment,
     TaskRequest,
     TaskResult,
     TaskState,
+    TaskType,
     TaskView,
     utcnow,
 )
@@ -107,17 +109,29 @@ class Router:
                 preferred = session.pinned_node
         return cluster or None, preferred
 
-    def _worker_prompt(self, request: TaskRequest, node: NodeInfo) -> str:
-        """Prompt the node should actually run. Session turns are replayed
-        from the server context store, truncated to this model's window."""
+    def _worker_payload(self, request: TaskRequest, node: NodeInfo
+                        ) -> tuple[str, list[ChatMessage] | None]:
+        """Prompt/messages the node should actually run.
+
+        Session chat is compiled from the server context store. Internal
+        jobs (record_turns=False) keep the request payload as submitted
+        so compaction does not replay the session onto itself.
+        """
         model = node.model
-        if (request.session_id and self.contexts is not None
-                and model is not None):
-            rendered = self.contexts.render_prompt(
-                request.session_id, model.context_window)
-            if rendered:
-                return rendered
-        return request.prompt
+        if (request.record_turns and request.session_id
+                and self.contexts is not None and model is not None):
+            compiled = self.contexts.compile(
+                request.session_id, model.context_window,
+                request.max_output_tokens)
+            if compiled:
+                messages = [ChatMessage.model_validate(m) for m in compiled]
+                prompt = "\n".join(f"{m.role}: {m.content}" for m in messages)
+                return prompt, messages
+        if request.messages:
+            prompt = "\n".join(
+                f"{m.role}: {m.content}" for m in request.messages)
+            return prompt, request.messages
+        return request.prompt, None
 
     @staticmethod
     def score(request: TaskRequest, node: NodeInfo, *,
@@ -146,6 +160,10 @@ class Router:
         if request.task_type in caps:
             score += 200.0
             reasons.append(f"capability {request.task_type.value}")
+        elif (request.task_type == TaskType.SUMMARIZATION
+              and TaskType.CHAT in caps):
+            score += 200.0
+            reasons.append("capability chat (summarize)")
         else:
             score -= 80.0
             reasons.append(f"no {request.task_type.value} capability")
@@ -185,7 +203,8 @@ class Router:
         """Match queued tasks to ready nodes. One task per node.
 
         The TaskRequest on each assignment is a wire copy: session tasks
-        have history replayed into ``prompt``. The queued row is unchanged.
+        have history compiled into ``messages`` (and a joined ``prompt``
+        for echo/scoring). The queued row is unchanged.
         """
         ready = {n.node_id: n for n in self.registry.ready_nodes()}
         # exclude nodes already holding an active assignment in our table
@@ -217,16 +236,16 @@ class Router:
                 candidates = matched
             # pin is preference: if it is not in candidates (busy/offline/
             # wrong cluster), we just score the rest and hop
-            scored: list[tuple[tuple[float, str], NodeInfo, str]] = []
+            scored: list[tuple[tuple[float, str], NodeInfo, str, list[ChatMessage] | None]] = []
             for n in candidates:
-                worker_prompt = self._worker_prompt(request, n)
+                worker_prompt, worker_messages = self._worker_payload(request, n)
                 scored.append((
                     self.score(request, n, prompt=worker_prompt,
                                preferred_node=preferred),
-                    n, worker_prompt,
+                    n, worker_prompt, worker_messages,
                 ))
             scored.sort(key=lambda t: t[0][0], reverse=True)
-            (best_score, reason), best, worker_prompt = scored[0]
+            (best_score, reason), best, worker_prompt, worker_messages = scored[0]
             if best_score <= -1e9:
                 continue  # no eligible node for this task; try next task
             attempt_id = f"a-{uuid.uuid4().hex[:10]}"
@@ -240,6 +259,7 @@ class Router:
             del ready[best.node_id]
             wire = request.model_copy()
             wire.prompt = worker_prompt
+            wire.messages = worker_messages
             out.append((TaskAssignment(
                 task_id=request.task_id, attempt_id=attempt_id,
                 node_id=best.node_id, lease_expires_at=lease,

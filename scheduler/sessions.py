@@ -91,6 +91,45 @@ class SessionManager:
                            "at": utcnow().isoformat()}).encode()
         return self.contexts.append_turn(session_id, expected_version, blob)
 
+    def append_turn_latest(self, session_id: str, role: str, content: str,
+                           attempts: int = 5) -> int:
+        """Append against current version; retry on concurrent writers."""
+        return self._append_latest(
+            session_id, attempts,
+            lambda version: self.append_turn(
+                session_id, version, role, content))
+
+    def append_compaction(self, session_id: str, expected_version: int,
+                          content: str, covers: list[int]) -> int:
+        """Record a rolling summary covering [lo, hi] context_versions."""
+        self.get(session_id)
+        blob = json.dumps({
+            "role": "system",
+            "kind": "compaction",
+            "covers_versions": covers,
+            "content": content,
+            "at": utcnow().isoformat(),
+        }).encode()
+        return self.contexts.append_turn(session_id, expected_version, blob)
+
+    def append_compaction_latest(self, session_id: str, content: str,
+                                 covers: list[int], attempts: int = 5) -> int:
+        return self._append_latest(
+            session_id, attempts,
+            lambda version: self.append_compaction(
+                session_id, version, content, covers))
+
+    def _append_latest(self, session_id: str, attempts: int, write) -> int:
+        last: SessionConflictError | None = None
+        for _ in range(max(1, attempts)):
+            version = self.contexts.latest_version(session_id)
+            try:
+                return write(version)
+            except SessionConflictError as e:
+                last = e
+        assert last is not None
+        raise last
+
     # -- migration ------------------------------------------------------------
 
     def migrate(self, session_id: str, to_node: str, reason: str) -> Session:

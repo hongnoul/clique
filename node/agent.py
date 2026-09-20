@@ -131,7 +131,8 @@ class NodeAgent:
         try:
             offset = 0
             async for delta in self.runtime.infer_stream(
-                    request.prompt, request.max_output_tokens):
+                    request.prompt, request.max_output_tokens,
+                    messages=request.messages):
                 chunks.append(delta)
                 await ws.send(protocol.dumps(protocol.msg_progress(
                     assignment.task_id, assignment.attempt_id, offset, delta)))

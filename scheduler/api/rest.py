@@ -24,7 +24,7 @@ from common.errors import (
     PermissionError_,
     SessionConflictError,
 )
-from common.types import TaskRequest, TaskState
+from common.types import ChatMessage, TaskRequest, TaskState
 
 if TYPE_CHECKING:  # pragma: no cover
     from fastapi import FastAPI
@@ -306,13 +306,27 @@ def register_extended_routes(app: "FastAPI", server: "SchedulerServer") -> None:
         messages = body.get("messages", [])
         if not messages:
             raise HTTPException(422, "messages required")
-        prompt = "\n".join(
-            f"{m.get('role', 'user')}: {m.get('content', '')}" for m in messages)
         session_id = body.get("session_id") or body.get("user")
+        sid = session_id if session_id and session_id.startswith("s-") else None
+        if sid:
+            last_user = next(
+                (m.get("content", "") for m in reversed(messages)
+                 if m.get("role", "user") == "user"),
+                messages[-1].get("content", ""))
+            prompt = last_user
+            chat_messages = None
+        else:
+            prompt = "\n".join(
+                f"{m.get('role', 'user')}: {m.get('content', '')}"
+                for m in messages)
+            chat_messages = [
+                ChatMessage(role=m.get("role", "user"),
+                            content=m.get("content", ""))
+                for m in messages]
         request = TaskRequest(
             prompt=prompt,
-            session_id=session_id if session_id and
-            session_id.startswith("s-") else None,
+            messages=chat_messages,
+            session_id=sid,
             model_hint=body.get("model") if body.get("model") not in
             (None, "", "clique", "auto") else None,
             max_output_tokens=body.get("max_tokens", 1024) or 1024,

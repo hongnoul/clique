@@ -4,7 +4,14 @@ specify-vs-auto scoring. No live agents.
 
 from __future__ import annotations
 
+import asyncio
+
+import pytest
+
+from common.config import Config
+from common.errors import SessionConflictError
 from common.types import (
+    ChatMessage,
     ModelSpec,
     NodeStatus,
     ResourceSnapshot,
@@ -122,12 +129,16 @@ def test_session_replays_truncated_history(tmp_path):
         prompt="beta followup", session_id=sess.session_id,
         model_hint="echo-7b-none", idempotency_key="ctx"))
     _, wire = router.schedule_pending()[0]
+    assert wire.messages is not None
+    assert [m.role for m in wire.messages] == ["user", "assistant", "user"]
+    assert wire.messages[0].content == "alpha unique token"
+    assert wire.messages[-1].content == "beta followup"
     assert wire.prompt.startswith("user: alpha unique token")
-    assert "assistant: ack" in wire.prompt
     assert wire.prompt.endswith("user: beta followup")
     # queued row keeps the original user turn, not the expanded prompt
     view = router.get_task(wire.task_id)
     assert view.request.prompt == "beta followup"
+    assert view.request.messages is None
 
 
 def test_bind_cluster_only_when_unbound(tmp_path):
@@ -138,3 +149,74 @@ def test_bind_cluster_only_when_unbound(tmp_path):
     assert sessions.get(sess.session_id).cluster_key == "echo-7b-none"
     sessions.bind_cluster(sess.session_id, "echo-70b-none")
     assert sessions.get(sess.session_id).cluster_key == "echo-7b-none"
+
+
+def test_compaction_job_does_not_replay_session(tmp_path):
+    seven = _spec(7.0)
+    _, router, sessions, _ = _pool(tmp_path, ("n1", seven))
+    sess = sessions.create("owner", "echo-7b-none")
+    sessions.append_turn(sess.session_id, 0, "user", "secret history token")
+    router.submit(TaskRequest(
+        prompt="fold me",
+        messages=[
+            ChatMessage(role="system", content="Summarize"),
+            ChatMessage(role="user", content="fold me"),
+        ],
+        session_id=sess.session_id,
+        record_turns=False,
+        task_type=TaskType.SUMMARIZATION,
+        compaction_covers=[1, 1],
+        idempotency_key="compact-job",
+    ))
+    assigned, wire = router.schedule_pending()[0]
+    assert "chat (summarize)" in assigned.reason
+    assert [m.role for m in wire.messages] == ["system", "user"]
+    assert wire.messages[0].content == "Summarize"
+    assert "secret history token" not in wire.prompt
+
+
+def test_append_turn_latest_retries_stale_version(tmp_path):
+    _, _, sessions, _ = _pool(tmp_path, ("n1", _spec(7.0)))
+    sess = sessions.create("owner", "echo-7b-none")
+    sessions.append_turn(sess.session_id, 0, "user", "a")
+    with pytest.raises(SessionConflictError):
+        sessions.append_turn(sess.session_id, 0, "user", "stale")
+    n = sessions.append_turn_latest(sess.session_id, "user", "b")
+    assert n == 2
+    assert sessions.contexts.latest_version(sess.session_id) == 2
+
+
+def test_compaction_does_not_relay_session_stream():
+    chat = TaskRequest(prompt="hi", session_id="s-1", idempotency_key="a")
+    assert chat.relays_session_stream()
+    job = TaskRequest(
+        prompt="sum", session_id="s-1", record_turns=False,
+        task_type=TaskType.SUMMARIZATION, idempotency_key="b")
+    assert not job.relays_session_stream()
+    oneshot = TaskRequest(prompt="hi", idempotency_key="c")
+    assert not oneshot.relays_session_stream()
+
+
+def test_maybe_compact_uses_window_output_cap(tmp_path):
+    from scheduler.context_store import summary_max_output_tokens
+    from scheduler.server import SchedulerServer
+
+    cfg = Config()
+    cfg.node.data_dir = tmp_path / "n"
+    cfg.server.db_path = tmp_path / "s.db"
+    server = SchedulerServer(cfg)
+    sess = server.sessions.create("owner", "echo-7b-none")
+    sid = sess.session_id
+    pad = "unique words " * 500
+    for i in range(8):
+        server.sessions.append_turn_latest(sid, "user", f"turn {i} {pad}")
+        server.sessions.append_turn_latest(sid, "assistant", f"ack {i}")
+    asyncio.run(server._maybe_compact(sid, max_output_tokens=64))
+    sums = [v for v in server.router.list_tasks()
+            if v.request.task_type == TaskType.SUMMARIZATION]
+    assert len(sums) == 1
+    req = sums[0].request
+    assert req.max_output_tokens != 64
+    assert req.max_output_tokens == summary_max_output_tokens(
+        8192, req.est_prompt_tokens())
+    assert req.record_turns is False
