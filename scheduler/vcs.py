@@ -145,14 +145,23 @@ class VcsService:
 
     def _tree_files(self, sha: str) -> dict[str, str]:
         commit = self._repo[sha.encode()]
-        tree = self._repo[commit.tree]
-        files = {}
-        for name, _mode, blob_sha in tree.iteritems():
-            try:
-                data = self._repo[blob_sha].data.decode()
-            except UnicodeDecodeError:
-                data = self._repo[blob_sha].data.decode("utf-8", "replace")
-            files[name.decode()] = data
+        files: dict[str, str] = {}
+
+        def walk(tree_sha, prefix: str) -> None:
+            tree = self._repo[tree_sha]
+            for name, mode, entry_sha in tree.iteritems():
+                path = f"{prefix}{name.decode()}"
+                obj = self._repo[entry_sha]
+                if obj.type_name == b"tree":
+                    walk(entry_sha, f"{path}/")
+                    continue
+                try:
+                    data = obj.data.decode()
+                except UnicodeDecodeError:
+                    data = obj.data.decode("utf-8", "replace")
+                files[path] = data
+
+        walk(commit.tree, "")
         return files
 
     def diff(self, sha_a: str, sha_b: str) -> str:
@@ -177,7 +186,9 @@ class VcsService:
         assert self._repo is not None
         files = self._tree_files(sha)
         for name, content in files.items():
-            (self.repo_dir / name).write_text(content)
+            target = self.repo_dir / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content)
             importer = self._importers.get(name)
             if importer is not None:
                 importer(content)

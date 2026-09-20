@@ -509,3 +509,36 @@ async def test_sdk_silent_reauth_on_stale_token(clique, tmp_path):
     second = await client.create_session()
     assert second["session_id"].startswith("s-")
     assert client.token is not None
+
+
+# -------------------------------------------------------- vcs nested trees
+
+
+def test_vcs_nested_tree_diff_and_rollback(tmp_path):
+    """code-repo commits are nested (<task_id>/<path>); diff, history
+    walking, and rollback must traverse subtrees, not just the root
+    tree (regression: 'Tree' object has no attribute 'data')."""
+    from scheduler.vcs import VcsService
+
+    vcs = VcsService(tmp_path / "code-repo")
+    vcs.init()
+    deep = vcs.repo_dir / "task-1" / "pkg" / "mod.py"
+    deep.parent.mkdir(parents=True)
+    deep.write_text("x = 1\n")
+    sha1 = vcs.commit_paths(["task-1/pkg/mod.py"], "seed", "n1")
+    assert sha1
+
+    # no-op commit is skipped even for nested paths
+    assert vcs.commit_paths(["task-1/pkg/mod.py"], "noop", "n1") is None
+
+    deep.write_text("x = 2\n")
+    sha2 = vcs.commit_paths(["task-1/pkg/mod.py"], "bump", "n1")
+    diff = vcs.diff(sha1, sha2)
+    assert "task-1/pkg/mod.py" in diff and "+x = 2" in diff
+
+    # rollback restores nested files (and creates parent dirs)
+    import shutil
+    shutil.rmtree(vcs.repo_dir / "task-1")
+    vcs.rollback(sha1, "n1")
+    assert deep.read_text() == "x = 1\n"
+    assert len(vcs.history(limit=10)) == 4  # baseline+seed+bump+rollback
