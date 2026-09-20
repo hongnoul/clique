@@ -328,6 +328,18 @@ async def clique_workspace_flush(workspace_id: str) -> dict:
 
 
 @mcp.tool()
+async def clique_workspace_export(workspace_id: str,
+                                  paths: list[str] | None = None) -> dict:
+    """Export a docs-sync bundle: full file contents + git provenance.
+
+    Dogfood agents draft docs in the live workspace, export the bundle,
+    and open a PR against the GitHub repo from a credentialed machine.
+    """
+    c = await _get_client()
+    return await c.workspace_export(workspace_id, paths=paths)
+
+
+@mcp.tool()
 async def clique_workspace_task(prompt: str, workspace_id: str,
                                 paths: list[str] | None = None,
                                 test_cmd: list[str] | None = None,

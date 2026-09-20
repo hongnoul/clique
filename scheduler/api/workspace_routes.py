@@ -206,6 +206,32 @@ def register_workspace_routes(app: "FastAPI", server: "SchedulerServer") -> None
             raise HTTPException(404, "no such workspace")
         return {"sha": sha}
 
+    @app.get("/v1/workspaces/{workspace_id}/export")
+    async def export_workspace(workspace_id: str,
+                               paths: str | None = None) -> dict:
+        """Docs-sync surface: full file contents + provenance bundle.
+
+        Dogfood agents draft docs in the live workspace, then export
+        the bundle and open a PR against the GitHub repo from a machine
+        with credentials. Optional ?paths=a.md,b.md filters files.
+        Reads are open (same as snapshot); no auth required.
+        """
+        try:
+            snap = server.live_workspaces.snapshot(workspace_id)
+        except KeyError:
+            raise HTTPException(404, "no such workspace")
+        wanted = None
+        if paths:
+            wanted = {p.strip() for p in paths.split(",") if p.strip()}
+        files = {p: f["text"] for p, f in snap["files"].items()
+                 if wanted is None or p in wanted}
+        try:
+            commits = server.live_workspaces.git_history(workspace_id, 10)
+        except Exception:
+            commits = []
+        return {"workspace_id": workspace_id, "seq": snap["seq"],
+                "files": files, "commits": commits}
+
     @app.get("/v1/workspaces/{workspace_id}/history")
     async def workspace_history(workspace_id: str, path: str | None = None,
                                 limit: int = 50) -> list[dict]:

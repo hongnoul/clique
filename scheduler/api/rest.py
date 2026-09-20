@@ -27,12 +27,32 @@ from common.errors import (
     SessionConflictError,
 )
 from common.think import StreamSplitter, split_think
-from common.types import ChatMessage, TaskRequest, TaskState
+from common.types import ChatMessage, TaskRequest, TaskState, ToolDef
 
 if TYPE_CHECKING:  # pragma: no cover
     from fastapi import FastAPI
 
     from scheduler.server import SchedulerServer
+
+
+def _parse_chat_tools(body: dict) -> tuple[list[ToolDef], str | dict | None]:
+    """OpenAI tools array -> (ToolDefs, tool_choice). Empty when none."""
+    parsed: list[ToolDef] = []
+    for t in body.get("tools") or []:
+        if not isinstance(t, dict):
+            continue
+        fn = t.get("function", {}) if "function" in t else t
+        name = fn.get("name", "")
+        if not name:
+            continue
+        try:
+            parsed.append(ToolDef(
+                name=name, description=fn.get("description", "") or "",
+                parameters=fn.get("parameters", {}) or {}))
+        except Exception:
+            continue
+    tc = body.get("tool_choice")
+    return parsed, tc if parsed and tc is not None else None
 
 
 def _actor(server: "SchedulerServer", request: Request) -> str:
@@ -276,6 +296,12 @@ def register_extended_routes(app: "FastAPI", server: "SchedulerServer") -> None:
             max_output_tokens=body.get("max_tokens", 1024) or 1024,
             idempotency_key=uuid.uuid4().hex,
         )
+        # Agentic loop: carry the caller's function manifest so the
+        # worker can emit tool_calls that execute server-side.
+        parsed_tools, tool_choice = _parse_chat_tools(body)
+        if parsed_tools:
+            request.tools = parsed_tools
+            request.tool_choice = tool_choice
         task_id = await server.submit_task(request)
         completion_id = f"chatcmpl-{task_id}"
         created = int(time.time())

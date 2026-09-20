@@ -342,3 +342,23 @@ def test_rest_patch_broadcasts_to_ws_watchers(tmp_path):
         delta = json.loads(watcher.receive_text())
         assert delta["type"] == "workspace.delta"
         assert delta["seq"] == 2 and delta["actor"] == "n1"
+
+
+def test_rest_export_bundle(tmp_path):
+    """Docs-sync surface: export returns files + commits, filterable."""
+    server = make_server(tmp_path)
+    client = TestClient(server.app)
+    server.tokens["tok"] = "n1"
+    server.live_workspaces.create("w1", {"a.md": "# hello\n", "b.md": "x\n"})
+    hdr = {"Authorization": "Bearer tok"}
+    client.post("/v1/workspaces/w1/patch", headers=hdr, json={
+        "path": "a.md", "base_version": 1,
+        "ops": [{"op": "insert", "line": 2, "text": "more\n"}]})
+    r = client.get("/v1/workspaces/w1/export")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["files"]["a.md"] == "# hello\nmore\n"
+    assert body["seq"] == 2 and isinstance(body["commits"], list)
+    r = client.get("/v1/workspaces/w1/export", params={"paths": "b.md"})
+    assert list(r.json()["files"]) == ["b.md"]
+    assert client.get("/v1/workspaces/nope/export").status_code == 404

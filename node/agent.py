@@ -44,6 +44,7 @@ class NodeAgent:
         self._stop = asyncio.Event()
         self._task_job: asyncio.Task | None = None
         self._ws = None
+        self._tool_waiters: dict[str, asyncio.Future] = {}
 
     # -------------------------------------------------------------- lifecycle
 
@@ -136,10 +137,43 @@ class NodeAgent:
                     # the executor can reread before its next chunk
                     self.workspace_seq = msg.get("seq", 0)
                     self.workspace_paths = msg.get("paths", [])
+                elif msg["type"] == protocol.TOOL_RESULT:
+                    fut = self._tool_waiters.pop(msg.get("call_id", ""), None)
+                    if fut is not None and not fut.done():
+                        fut.set_result(msg)
         finally:
             hb.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await hb
+
+    def _make_tool_caller(self, ws, assignment: TaskAssignment):
+        """Build the call_tool callback: TOOL_CALL over WS, await result."""
+        import uuid as _uuid
+
+        async def call_tool(name: str, arguments: dict) -> tuple[bool, str]:
+            call_id = f"call_{_uuid.uuid4().hex[:10]}"
+            loop = asyncio.get_event_loop()
+            fut: asyncio.Future = loop.create_future()
+            self._tool_waiters[call_id] = fut
+            try:
+                await ws.send(protocol.dumps(protocol.msg_tool_call(
+                    assignment.task_id, assignment.attempt_id,
+                    call_id, name, arguments)))
+                msg = await asyncio.wait_for(fut, timeout=120.0)
+                result = msg.get("result", "")
+                if not isinstance(result, str):
+                    import json as _json
+                    try:
+                        result = _json.dumps(result)
+                    except (TypeError, ValueError):
+                        result = str(result)
+                return bool(msg.get("ok", False)), result
+            except asyncio.TimeoutError:
+                return False, "tool timeout (120s)"
+            finally:
+                self._tool_waiters.pop(call_id, None)
+
+        return call_tool
 
     async def _execute(self, ws, assignment: TaskAssignment, request: TaskRequest) -> None:
         start = time.monotonic()
@@ -160,7 +194,9 @@ class NodeAgent:
                 return []
 
             output = await execute(ws, self.runtime, assignment, request,
-                                   workspace_drift=_drift)
+                                   workspace_drift=_drift,
+                                   call_tool=self._make_tool_caller(
+                                       ws, assignment))
             # clear consumed drift so the next task starts clean
             if seen:
                 self.workspace_paths = [

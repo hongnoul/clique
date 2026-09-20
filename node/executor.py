@@ -130,7 +130,8 @@ def _snapshot_from_prompt(prompt: str) -> dict[str, str]:
 
 async def execute(ws, runtime: BaseRuntime, assignment: TaskAssignment,
                   request: TaskRequest,
-                  progress_cb=None, workspace_drift=None) -> str:
+                  progress_cb=None, workspace_drift=None,
+                  call_tool=None) -> str:
     """Run one task. Returns the final raw output text.
 
     Streams live: each infer_stream delta is forwarded (progress_cb
@@ -141,7 +142,14 @@ async def execute(ws, runtime: BaseRuntime, assignment: TaskAssignment,
     paths changed in the live workspace since the task snapshot. When
     non-empty, a drift note is appended to the transcript so the model
     rereads those files instead of reasoning on stale content.
+    call_tool(name, arguments) -> (ok, result): optional callback that
+    executes one model-requested tool call server-side (agent relays
+    over WS). When request.tools is set, the executor runs an agentic
+    loop (infer_tools rounds) instead of single-shot streaming.
     """
+    if request.tools and call_tool is not None:
+        return await _execute_agentic(
+            ws, runtime, assignment, request, progress_cb, call_tool)
     use_tools = "TOOLS:" in request.prompt
     if not use_tools:
         return await _collect_streaming(
@@ -206,3 +214,74 @@ async def execute_simple(runtime: BaseRuntime, prompt: str,
                          max_tokens: int) -> str:
     """Test helper: single-shot without WS."""
     return await _collect(runtime, prompt, max_tokens)
+
+
+#: Max model->tool->model rounds per task (bounds cost on small models
+#: that call tools in circles).
+AGENTIC_MAX_ROUNDS = 8
+
+
+async def _execute_agentic(ws, runtime: BaseRuntime,
+                           assignment: TaskAssignment, request: TaskRequest,
+                           progress_cb, call_tool) -> str:
+    """OpenAI function-call loop: model emits tool_calls, server executes.
+
+    Each round: one blocking infer_tools call with the full transcript,
+    then every requested call runs via call_tool (server-side relay).
+    Observations append as role=tool messages. Ends when the model
+    returns content with no calls, or rounds exhaust (last content wins).
+    Progress streams per-round headers so the dash shows the loop live.
+    """
+    from node.model_runtime import _as_openai_messages, _as_openai_tools
+    tools = _as_openai_tools(request.tools)
+    transcript: list[dict] = _as_openai_messages(
+        request.prompt, request.messages)
+    # Nudge text-only models toward the fallback shape the parser
+    # catches ({"action": name, "arguments": {...}}).
+    names = [t.name for t in (request.tools or [])]
+    transcript[0]["content"] = (
+        transcript[0].get("content", "")
+        + "\nYou have tools: " + ", ".join(names) + ". "
+        "To use one, reply with ONLY a JSON object "
+        '{"action": "<name>", "arguments": {...}} and nothing else. '
+        "Results come back as a tool message; then continue.")
+    final_content = ""
+    for rnd in range(AGENTIC_MAX_ROUNDS):
+        content, calls = await runtime.infer_tools(
+            transcript, tools, request.tool_choice,
+            request.max_output_tokens)
+        if not calls:
+            final_content = content
+            if content:
+                await _send(ws, assignment, progress_cb, 0,
+                            f"[tools done after {rnd} calls] ")
+            break
+        await _send(ws, assignment, progress_cb, 0,
+                    f"[step {rnd}] {len(calls)} tool call(s): "
+                    + ", ".join(c.name for c in calls) + " ")
+        # assistant turn with tool_calls goes on the transcript first
+        transcript.append({
+            "role": "assistant", "content": content or "",
+            "tool_calls": [
+                {"id": c.call_id or f"call_{rnd}_{i}",
+                 "type": "function",
+                 "function": {"name": c.name,
+                              "arguments": json.dumps(c.arguments)}}
+                for i, c in enumerate(calls)]})
+        for i, c in enumerate(calls[:4]):  # cap fan-out per round
+            call_id = c.call_id or f"call_{rnd}_{i}"
+            try:
+                ok, result = await call_tool(c.name, c.arguments)
+            except Exception as e:
+                ok, result = False, f"relay error: {e}"
+            if not isinstance(result, str):
+                try:
+                    result = json.dumps(result)
+                except (TypeError, ValueError):
+                    result = str(result)
+            transcript.append({"role": "tool", "content": result[:8000],
+                               "tool_call_id": call_id})
+            await _send(ws, assignment, progress_cb, 0,
+                        f"[tool {c.name}: {'ok' if ok else 'error'}] ")
+        final_content = content
+    return final_content or "(no answer)"

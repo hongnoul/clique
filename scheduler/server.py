@@ -751,6 +751,18 @@ class SchedulerServer:
                     "session.delta",
                     {"task_id": tid, "delta": msg["text_delta"]},
                     topic=f"session:{view.request.session_id}")
+        elif mtype == protocol.TOOL_CALL:
+            from scheduler.tool_executor import execute_tool
+            ok, result = await execute_tool(
+                self, msg.get("task_id", ""), msg.get("name", ""),
+                msg.get("arguments", {}))
+            ws = self.conns.get(node_id)
+            if ws is not None:
+                with contextlib.suppress(Exception):
+                    await ws.send_text(protocol.dumps(
+                        protocol.msg_tool_result(
+                            msg.get("task_id", ""), msg.get("call_id", ""),
+                            ok, result)))
         elif mtype == protocol.RESULT:
             result = TaskResult.model_validate(msg["result"])
             result = await self._verify_code_result(result)

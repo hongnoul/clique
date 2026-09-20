@@ -165,3 +165,93 @@ async def test_tool_loop_caps_steps():
     out = await execute(None, rt, _asgn(), _req(prompt),
                         progress_cb=lambda t: None)
     assert out  # terminates via MAX_STEPS, never hangs
+
+
+# -- agentic function-call loop ------------------------------------------
+
+class ScriptToolsRuntime:
+    """Scripted (content, calls) rounds for infer_tools."""
+
+    def __init__(self, rounds: list[tuple[str, list]]) -> None:
+        self.rounds = list(rounds)
+
+    async def health(self) -> bool:
+        return True
+
+    async def infer_stream(self, prompt: str, max_tokens: int):
+        yield ""
+
+    async def infer_tools(self, messages, tools, tool_choice, max_tokens):
+        return self.rounds.pop(0) if self.rounds else ("done", [])
+
+
+def _agentic_req() -> TaskRequest:
+    from common.types import ToolDef
+    return TaskRequest(
+        prompt="assess the system", idempotency_key="k",
+        tools=[ToolDef(name="clique_self_assess",
+                       description="assess",
+                       parameters={"type": "object", "properties": {}})])
+
+
+@pytest.mark.asyncio
+async def test_agentic_loop_calls_tool_and_returns_answer():
+    from common.types import ToolCall
+    rt = ScriptToolsRuntime([
+        ("", [ToolCall(call_id="c1", name="clique_self_assess",
+                       arguments={})]),
+        ("all healthy", []),
+    ])
+    relayed: list = []
+
+    async def fake_call(name, args):
+        relayed.append((name, args))
+        return True, '{"findings": ["healthy"]}'
+    out = await execute(None, rt, _asgn(), _agentic_req(),
+                        progress_cb=lambda t: None, call_tool=fake_call)
+    assert out == "all healthy"
+    assert relayed == [("clique_self_assess", {})]
+
+
+@pytest.mark.asyncio
+async def test_agentic_loop_text_fallback_counts_as_call():
+    # model describes the call as literal JSON text (lobster mode):
+    # parser must still route it to the tool, not the answer.
+    from node.model_runtime import parse_tool_calls_response
+    content, calls = parse_tool_calls_response({
+        "choices": [{"message": {
+            "content": '{"action": "clique_self_assess", "arguments": {}}'}}]})
+    assert content == "" and calls[0].name == "clique_self_assess"
+
+
+@pytest.mark.asyncio
+async def test_agentic_loop_native_tool_calls_parsed():
+    from node.model_runtime import parse_tool_calls_response
+    content, calls = parse_tool_calls_response({
+        "choices": [{"message": {
+            "content": "",
+            "tool_calls": [{"id": "c9", "type": "function",
+                            "function": {"name": "clique_status",
+                                         "arguments": '{"verbose": true}'}}]}}]})
+    assert calls[0].call_id == "c9"
+    assert calls[0].arguments == {"verbose": True}
+
+
+@pytest.mark.asyncio
+async def test_agentic_loop_without_relay_falls_back_to_single_shot():
+    # request.tools set but no call_tool (e.g. tests): plain path, no hang
+    rt = ScriptToolsRuntime([("should not be used", [])])
+    out = await execute(None, rt, _asgn(), _agentic_req(),
+                        progress_cb=lambda t: None)
+    assert out == ""
+
+
+@pytest.mark.asyncio
+async def test_fallback_after_think_block():
+    # nemotron wraps answers after </think>: parser must find the JSON
+    from node.model_runtime import parse_tool_calls_response
+    content, calls = parse_tool_calls_response({
+        "choices": [{"message": {
+            "content": "We need to respond with only a JSON object.\n</think>\n"
+                       '{"action": "clique_self_assess", "arguments": {}}'}}]})
+    assert content == "" and calls[0].name == "clique_self_assess"
