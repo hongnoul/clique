@@ -26,6 +26,7 @@ from common.errors import (
     NodeUnavailableError,
     SessionConflictError,
 )
+from common.think import StreamSplitter, split_think
 from common.types import ChatMessage, TaskRequest, TaskState
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -203,10 +204,49 @@ def register_extended_routes(app: "FastAPI", server: "SchedulerServer") -> None:
 
     # ----------------------------------------------- OpenAI-compat completions
 
+    @app.get("/v1/models")
+    async def list_models() -> dict:
+        """OpenAI-compatible model listing for spawn backends (e.g. jcode).
+
+        Advertises the auto aliases plus one entry per live cluster so
+        clients can discover routable model names without prior knowledge.
+        """
+        ids: list[str] = ["clique", "auto"]
+        seen: set[str] = set(ids)
+        for c in server.registry.list_clusters():
+            for candidate in (c.cluster_key, c.model.family):
+                if candidate and candidate not in seen:
+                    ids.append(candidate)
+                    seen.add(candidate)
+        return {"object": "list",
+                "data": [{"id": mid, "object": "model",
+                          "created": 0, "owned_by": "clique"}
+                         for mid in ids]}
+
+    def _node_family(node_id: str | None) -> str | None:
+        if not node_id:
+            return None
+        info = server.registry.get(node_id)
+        return info.model.family if info and info.model else None
+
+    def _finish_reason(view) -> str:
+        if view.state == TaskState.SUCCEEDED and view.result:
+            out_tokens = view.result.output_tokens
+            limit = view.request.max_output_tokens
+            if out_tokens and limit and out_tokens >= limit:
+                return "length"
+        return "stop"  # terminal non-success surfaces via HTTP error instead
+
     @app.post("/v1/chat/completions", response_model=None)
     async def chat_completions(body: dict) -> dict | StreamingResponse:
         """Adapter: wraps a TaskRequest (+ optional session) so existing
-        OpenAI-client tools can point at the clique as a provider."""
+        OpenAI-client tools can point at the clique as a provider.
+
+        Reasoning-model output (``...</think>answer``) is split
+        server-side: chain-of-thought streams as DeepSeek-style
+        ``reasoning_content`` deltas while ``content`` stays clean. Raw
+        text remains available on /dash and partial_output.
+        """
         messages = body.get("messages", [])
         if not messages:
             raise HTTPException(422, "messages required")
@@ -264,8 +304,17 @@ def register_extended_routes(app: "FastAPI", server: "SchedulerServer") -> None:
                 """
                 import json as _json
                 key, q = server.events.subscribe(f"task:{task_id}")
+                splitter = StreamSplitter()
+
+                def chunk_for(delta: dict, finish: str | None = None) -> str:
+                    payload = {
+                        "id": completion_id,
+                        "object": "chat.completion.chunk",
+                        "created": created, "model": model_name,
+                        "choices": [{"index": 0, "delta": delta,
+                                     "finish_reason": finish}]}
+                    return f"data: {_json.dumps(payload)}\n\n"
                 try:
-                    sent = 0
                     while True:
                         view = server.router.get_task(task_id)
                         partial = server.progress.get(task_id, "")
@@ -275,24 +324,17 @@ def register_extended_routes(app: "FastAPI", server: "SchedulerServer") -> None:
                         if done and view.state == TaskState.SUCCEEDED and \
                                 view.result and view.result.output:
                             partial = view.result.output
-                        if len(partial) > sent:
-                            chunk = {
-                                "id": completion_id,
-                                "object": "chat.completion.chunk",
-                                "created": created, "model": model_name,
-                                "choices": [{"index": 0, "delta":
-                                             {"content": partial[sent:]},
-                                             "finish_reason": None}]}
-                            yield f"data: {_json.dumps(chunk)}\n\n"
-                            sent = len(partial)
+                        if view is not None and not splitter.locked:
+                            splitter.set_family(
+                                _node_family(view.assigned_node))
+                        r_delta, c_delta = splitter.feed(
+                            partial, done=bool(done))
+                        if r_delta:
+                            yield chunk_for({"reasoning_content": r_delta})
+                        if c_delta:
+                            yield chunk_for({"content": c_delta})
                         if done:
-                            final = {
-                                "id": completion_id,
-                                "object": "chat.completion.chunk",
-                                "created": created, "model": model_name,
-                                "choices": [{"index": 0, "delta": {},
-                                             "finish_reason": "stop"}]}
-                            yield f"data: {_json.dumps(final)}\n\n"
+                            yield chunk_for({}, finish=_finish_reason(view))
                             yield "data: [DONE]\n\n"
                             return
                         try:
@@ -301,19 +343,24 @@ def register_extended_routes(app: "FastAPI", server: "SchedulerServer") -> None:
                             pass  # re-check router state (missed-event guard)
                 finally:
                     server.events.unsubscribe(key)
-            return StreamingResponse(sse(), media_type="text/event-stream")
+            return StreamingResponse(
+                sse(), media_type="text/event-stream",
+                headers={"x-clique-task-id": task_id})
 
         view = await wait_done()
         if view.state != TaskState.SUCCEEDED:
             error = view.result.error if view.result else view.state.value
             raise HTTPException(502, f"task {view.state.value}: {error}")
         output = view.result.output or ""
+        reasoning, content = split_think(output)
+        message: dict = {"role": "assistant", "content": content}
+        if reasoning:
+            message["reasoning_content"] = reasoning
         return {
             "id": completion_id, "object": "chat.completion",
             "created": created, "model": model_name,
-            "choices": [{"index": 0, "message":
-                         {"role": "assistant", "content": output},
-                         "finish_reason": "stop"}],
+            "choices": [{"index": 0, "message": message,
+                         "finish_reason": _finish_reason(view)}],
             "usage": {
                 "prompt_tokens": view.result.prompt_tokens or 0,
                 "completion_tokens": view.result.output_tokens or 0,

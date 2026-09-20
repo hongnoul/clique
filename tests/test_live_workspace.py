@@ -284,3 +284,61 @@ def test_ws_patch_requires_auth(tmp_path):
             "ops": [{"op": "insert", "line": 2, "text": "y\n"}]}))
         d = json.loads(authed.receive_text())
         assert d["seq"] == 2
+
+
+def test_rest_patch_endpoint(tmp_path):
+    """One-shot REST write: sequenced, rebased, auth-gated."""
+    server = make_server(tmp_path)
+    client = TestClient(server.app)
+    server.tokens["tok"] = "n1"
+    server.live_workspaces.create("w1", {"a.py": "x\n"})
+    hdr = {"Authorization": "Bearer tok"}
+
+    # no auth -> 401
+    r = client.post("/v1/workspaces/w1/patch", json={
+        "path": "a.py", "base_version": 1,
+        "ops": [{"op": "insert", "line": 2, "text": "y\n"}]})
+    assert r.status_code == 401
+
+    # authed write applies and bumps seq/version
+    r = client.post("/v1/workspaces/w1/patch", headers=hdr, json={
+        "path": "a.py", "base_version": 1,
+        "ops": [{"op": "insert", "line": 2, "text": "y\n"}]})
+    assert r.status_code == 200
+    ev = r.json()
+    assert ev["seq"] == 2 and ev["version"] == 2 and not ev["rebased"]
+    st = client.get("/v1/workspaces/w1/file",
+                    params={"path": "a.py"}).json()
+    assert st["text"] == "x\ny\n"
+
+    # stale base rebases, never rejects
+    r = client.post("/v1/workspaces/w1/patch", headers=hdr, json={
+        "path": "a.py", "base_version": 1,
+        "ops": [{"op": "insert", "line": 2, "text": "z\n"}]})
+    assert r.status_code == 200 and r.json()["rebased"]
+
+    # unknown workspace -> 404, bad body -> 422
+    assert client.post("/v1/workspaces/nope/patch", headers=hdr,
+                       json={"path": "a.py", "ops": []}).status_code == 404
+    assert client.post("/v1/workspaces/w1/patch", headers=hdr,
+                       json={"ops": []}).status_code == 422
+
+
+def test_rest_patch_broadcasts_to_ws_watchers(tmp_path):
+    """A REST write lands as a live delta on open workspace sockets."""
+    server = make_server(tmp_path)
+    client = TestClient(server.app)
+    server.tokens["tok"] = "n1"
+    server.live_workspaces.create("w1", {"a.py": "x\n"})
+    with client.websocket_connect("/ws/workspace/w1") as watcher:
+        snap = json.loads(watcher.receive_text())
+        assert snap["type"] == "workspace.snapshot"
+        r = client.post("/v1/workspaces/w1/patch",
+                        headers={"Authorization": "Bearer tok"},
+                        json={"path": "a.py", "base_version": 1,
+                              "ops": [{"op": "replace_file",
+                                       "text": "shared\n"}]})
+        assert r.status_code == 200
+        delta = json.loads(watcher.receive_text())
+        assert delta["type"] == "workspace.delta"
+        assert delta["seq"] == 2 and delta["actor"] == "n1"

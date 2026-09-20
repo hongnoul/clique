@@ -110,6 +110,19 @@ if [ -n "$WS" ]; then
     && ok "workspace file readable" || bad "workspace file read failed"
   clique workspace --server "$S" 2>/dev/null | grep -q "$WS" \
     && ok "workspace listed via CLI" || bad "workspace missing from CLI list"
+  # shared scope: agent B writes via REST patch, agent A reads it back live
+  clique workspace --write "$WS" --file greet.py \
+    --content 'GREETING = "shared-scope"' --server "$S" >/dev/null 2>&1 \
+    && ok "one-shot REST write (socket VCS)" || bad "REST write failed"
+  clique workspace --show "$WS" --file greet.py --server "$S" 2>/dev/null \
+    | grep -q "shared-scope" \
+    && ok "second reader sees the write (shared realtime scope)" \
+    || bad "cross-client read missed the write"
+  clique workspace --write "$WS" --file greet.py \
+    --content 'GREETING = "bonjour"' --server "$S" >/dev/null 2>&1 \
+    || bad "restore write failed"
+  clique workspace --history "$WS" --server "$S" 2>/dev/null | grep -q "seq=" \
+    && ok "op history records actors + seq" || bad "history empty"
   WOUT=$(clique code-submit --server "$S" --workspace "$WS" \
     -p "greet.py defines GREETING. Add SHOUT = GREETING.upper(). Only modify greet.py." \
     --inline 'greet.py:GREETING = "stale-client-copy"\n' \

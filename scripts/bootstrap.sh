@@ -42,9 +42,11 @@ main() {
     need curl
     need tar
 
-    # find python >= 3.11
+    # find python >= 3.11 (newest first; probe future minors so a
+    # Homebrew/uv python3.15+ never fails the hard-coded list again)
     PY=""
-    for cand in python3.13 python3.12 python3.11 python3; do
+    for cand in python3.16 python3.15 python3.14 python3.13 python3.12 \
+                python3.11 python3; do
         if command -v "$cand" >/dev/null 2>&1; then
             if "$cand" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3,11) else 1)'; then
                 PY="$cand"; break
@@ -141,9 +143,19 @@ main() {
     # symlink entry points onto PATH
     log "linking..."
     mkdir -p "$BIN_DIR"
-    for cmd in clique clique-agent clique-server; do
+    for cmd in clique clique-agent clique-server clique-mcp; do
         ln -sf "$SRC_DIR/.venv/bin/$cmd" "$BIN_DIR/$cmd"
     done
+
+    # Headless MCP setup: register clique-mcp with local agent harnesses.
+    # Pinned to $CLIQUE_SERVER when set, else mDNS discovery at call time.
+    if [ -n "${CLIQUE_SERVER:-}" ]; then
+        "$BIN_DIR/clique" mcp install --url "$CLIQUE_SERVER" || \
+            warn "mcp install failed (rerun: clique mcp install --url $CLIQUE_SERVER)"
+    else
+        "$BIN_DIR/clique" mcp install || \
+            warn "mcp install failed (rerun: clique mcp install)"
+    fi
 
     "$BIN_DIR/clique" --help >/dev/null 2>&1 || err "install check failed ('clique --help')"
     log "installed clique to ${BIN_DIR}/clique"

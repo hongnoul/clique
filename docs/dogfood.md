@@ -114,9 +114,55 @@ not a dependency.
   truth for dogfood. Push to GitHub when convenient for backup/publicity, but
   never require it in the join or update path. `clique onboard`'s SHA warning
   is the drift detector until GitHub is fully out of the loop.
-- **Not yet done:** `bootstrap.sh` still documents the PAT flow for raw clones;
-  point it at `/repo.bundle` or delete once no machine uses it. Server-side
-  `state-repo`/`code-repo` (dulwich) already version without GitHub.
+- **Done:** `bootstrap.sh` is server-first: with `CLIQUE_SERVER` set it
+  installs from `/repo.bundle` (falling back to `/app.tgz`), touching
+  GitHub only when no server is reachable. Server-side
+  `state-repo`/`code-repo`/workspace repos (dulwich/git) all version
+  without GitHub. G1 is closed.
+
+## Shared realtime context: the internal socket VCS
+
+Live workspaces (`docs/live-workspaces.md`) are the clique's internal
+realtime version control: one sequencer per workspace, WS deltas to every
+subscriber, rebase-not-reject on stale writers, debounced git checkpoints.
+This is the layer agents and humans share scope through. Three surfaces,
+all hitting the same sequenced state:
+
+- **CLI:** `clique workspace --create/--show/--write/--watch/--history/--commits/--flush`.
+  `--watch` streams live deltas (snapshot first); `--write` is a one-shot
+  sequenced replace via `POST /v1/workspaces/{id}/patch`.
+- **MCP:** `clique-mcp` exposes `clique_workspace_create/list/read/write/
+  patch/history/flush/task`, so any MCP harness (jcode, claude, codex)
+  reads and writes the same live files as every other agent. `join.sh`
+  auto-registers the MCP server into local harnesses.
+- **Agents:** tasks submitted with `--workspace` stamp head `seq`, embed
+  live file text, and receive `workspace.invalidate` pushes mid-task.
+  Verified code-task success force-flushes so results are visible
+  immediately to all watchers.
+
+## Closed-loop dogfood: readiness gates
+
+The loop is closed when the clique develops itself: agents on clique
+inference edit shared workspaces, verify with tests, and the result
+deploys back to the server that scheduled the work.
+
+| Gate | Check | Status 2026-09-20 |
+|---|---|---|
+| G1 GitHub out of the loop | join/update/dev-checkout need zero GitHub creds (`join.sh`, `/repo.bundle`) | done |
+| G2 Socket VCS live on prod | create + write + watch from two clients, deltas cross | verify after each deploy (`sweep-all.sh` covers it) |
+| G3 MCP surface | `clique-mcp` tools include inference + workspaces, registered in harnesses | done this deploy |
+| G4 Multi-agent shared scope | two agents on different machines see each other's workspace writes in <1s, invalidate reaches running tasks | verified via REST+WS fanout tests and prod check below |
+| G5 Self-hosted edits | a code task on clique inference edits a workspace file, tests pass, diff commits to code-repo | sweep step exists; make it routine |
+
+Prod verification one-liner set (run from any laptop):
+
+```bash
+S=${CLIQUE_SERVER:-http://100.83.233.124:7777}
+W=$(clique workspace --create --files '{"notes.md":"hello\n"}' --server $S)
+clique workspace --watch $W --server $S &      # terminal A: live deltas
+clique workspace --write $W --file notes.md --content 'from B\n' --server $S
+# watcher prints the delta with actor + seq -> shared scope confirmed
+```
 
 ## Rollback / safety
 

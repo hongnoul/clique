@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
+from pathlib import Path
 
 import httpx
 import typer
@@ -684,12 +685,24 @@ def workspace(list: bool = typer.Option(False, "--list", help="list workspaces")
                                        help="path inside workspace"),
               flush: str = typer.Option(None, "--flush",
                                         help="force git checkpoint"),
+              write: str = typer.Option(None, "--write",
+                                        help="workspace id to write into "
+                                             "(needs --file and --content "
+                                             "or --from)"),
+              content: str = typer.Option(None, "--content",
+                                          help="literal new file content"),
+              from_path: str = typer.Option(None, "--from",
+                                            help="local file to upload as "
+                                                 "the new content"),
+              watch: str = typer.Option(None, "--watch",
+                                        help="workspace id to stream live "
+                                             "events from (Ctrl-C to stop)"),
               history: str = typer.Option(None, "--history",
                                           help="recent op log for workspace id"),
               commits: str = typer.Option(None, "--commits",
                                           help="git checkpoint log for workspace id"),
               server: str = typer.Option(None)) -> None:
-    """Live realtime workspaces: create, list, snapshot, flush."""
+    """Live realtime workspaces: create, list, snapshot, write, watch, flush."""
     import json as _json
     client = _authed(server)
 
@@ -698,6 +711,29 @@ def workspace(list: bool = typer.Option(False, "--list", help="list workspaces")
             data = await client.workspace_create(
                 _json.loads(files) if files else {})
             console.print(f"[green]{data['workspace_id']}[/] seq={data['seq']}")
+        elif write:
+            if not file or (content is None and not from_path):
+                console.print("[red]--write needs --file and --content/--from[/]")
+                raise typer.Exit(2)
+            text = content if content is not None \
+                else Path(from_path).read_text()
+            ev = await client.workspace_write(write, file, text)
+            rb = " rebased" if ev.get("rebased") else ""
+            console.print(f"[green]wrote[/] {file} v{ev['version']}"
+                          f" seq={ev['seq']}{rb}")
+        elif watch:
+            async for ev in client.workspace_watch(watch):
+                t = ev.get("type", "?")
+                if t == "workspace.snapshot":
+                    console.print(f"[dim]snapshot seq={ev['seq']} files="
+                                  f"{list(ev.get('files', {}))}[/]")
+                elif t == "workspace.delta":
+                    rb = " [yellow]rebased[/]" if ev.get("rebased") else ""
+                    console.print(f"seq={ev['seq']} {ev['path']}"
+                                  f" v{ev['version']} by"
+                                  f" {str(ev.get('actor', ''))[:8]}{rb}")
+                else:
+                    console.print(f"[dim]{t}[/] {ev}")
         elif history:
             for h in await client.workspace_history(history, path=file):
                 rb = " [yellow]rebased[/]" if h["rebased"] else ""
@@ -862,6 +898,94 @@ def _detect_runtime(base_url: str | None, model_name: str | None,
             if model_name:
                 return "openai-compat", bu, model_name
     return "echo", None, None
+
+
+mcp_app = typer.Typer(no_args_is_help=True, add_completion=False,
+                      help="MCP integration for local agent harnesses.")
+app.add_typer(mcp_app, name="mcp")
+
+
+@mcp_app.command("install")
+def mcp_install(url: str = typer.Option(
+        None, help="pin CLIQUE_URL (omit to use LAN discovery)"),
+        show_skipped: bool = typer.Option(
+            False, "--show-skipped", help="also list absent harnesses")) -> None:
+    """Register clique-mcp with every agent harness on this machine.
+
+    Headless and idempotent: finds Claude Code, Codex, Cursor, Windsurf,
+    Claude Desktop and Jcode configs, and adds/updates a ``clique`` stdio
+    entry pointing at the absolute clique-mcp binary.
+    """
+    from client.mcp_install import find_binary, install
+    binary = find_binary()
+    results = install(url=url, binary=binary)
+    touched = 0
+    for r in results:
+        if r.action.startswith("skipped"):
+            if show_skipped:
+                console.print(f"[dim]{r.harness:14} {r.action}[/]")
+            continue
+        touched += 1
+        console.print(f"[green]{r.harness:14} {r.action}[/] -> {r.path}")
+    console.print(f"\nbinary: {binary}")
+    console.print(f"server: {url or 'mDNS discovery at call time'}")
+    if touched == 0:
+        console.print("[yellow]no harness configs found; "
+                      "run with --show-skipped to see paths checked[/]")
+    else:
+        console.print("[dim]restart harnesses to pick up the change[/]")
+
+
+@mcp_app.command("status")
+def mcp_status() -> None:
+    """Show which harnesses have the clique MCP server registered."""
+    from client.mcp_install import status as mcp_st
+    for r in mcp_st():
+        color = {"registered": "green",
+                 "absent": "dim"}.get(r.action, "yellow")
+        console.print(f"[{color}]{r.harness:14} {r.action}[/] {r.path}")
+
+
+@mcp_app.command("serve")
+def mcp_serve() -> None:
+    """Run the MCP server on stdio (what harnesses invoke)."""
+    from client.mcp_server import main as mcp_main
+    mcp_main()
+
+
+@mcp_app.command("grow")
+def mcp_grow(url: str = typer.Option(
+        None, help="pin CLIQUE_URL (omit to use LAN discovery)"),
+        no_check: bool = typer.Option(
+            False, "--no-check",
+            help="skip the smoke validation probe")) -> None:
+    """Register everything in ~/dogfood-mcp as MCP servers.
+
+    Convention for agent-built tools: each ``~/dogfood-mcp/<name>/``
+    holds ``server.py`` (MCP stdio) plus an optional ``mcp.json``
+    overriding {command, args, env}. Valid servers get a named entry
+    in every harness config on this machine, so the next pane (jcode,
+    claude, codex) starts with the accumulated capabilities.
+    Idempotent: re-run any time. ``clique`` itself re-registers first.
+    """
+    from client.mcp_install import dogfood_dir, grow
+    servers, results = grow(url=url, check=not no_check)
+    console.print(f"[dim]dogfood dir: {dogfood_dir()}[/]")
+    if not servers:
+        console.print("[dim]no grown servers yet: agents add "
+                      "~/dogfood-mcp/<name>/server.py, then re-run grow[/]")
+    for s in servers:
+        if s.valid:
+            console.print(f"[green]{s.name:20} valid[/] {s.path}")
+        else:
+            console.print(f"[red]{s.name:20} skipped[/] {s.problem}")
+    for r in results:
+        if r.action.startswith("skipped"):
+            continue
+        color = "green" if r.action in ("installed", "updated") else "yellow"
+        console.print(f"[{color}]{r.harness:24} {r.action}[/]")
+    console.print("[dim]restart harnesses (or open a new pane) "
+                  "to pick up the change[/]")
 
 
 def main() -> None:

@@ -132,7 +132,7 @@ main() {
     need tar
 
     PY=""
-    for cand in python3.13 python3.12 python3.11 python3; do
+    for cand in python3.16 python3.15 python3.14 python3.13 python3.12 python3.11 python3; do
         if command -v "$cand" >/dev/null 2>&1; then
             if "$cand" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3,11) else 1)'; then
                 PY="$cand"; break
@@ -169,11 +169,17 @@ main() {
     "$INSTALL_DIR/.venv/bin/pip" install -q -e "$INSTALL_DIR"
     log "linking..."
     mkdir -p "$BIN_DIR"
-    for cmd in clique clique-agent clique-server; do
+    for cmd in clique clique-agent clique-server clique-mcp; do
         ln -sf "$INSTALL_DIR/.venv/bin/$cmd" "$BIN_DIR/$cmd"
     done
 
     log "installed clique to ${BIN_DIR}/clique (server: ${CLIQUE_SERVER})"
+
+    # Headless MCP setup: register clique-mcp with every local agent
+    # harness (Claude Code, Codex, Cursor, ...), pinned to this server.
+    # Idempotent and skips harnesses that are not installed.
+    "$BIN_DIR/clique" mcp install --url "$CLIQUE_SERVER" || \
+        warn "mcp install failed (rerun later: clique mcp install --url $CLIQUE_SERVER)"
 
     case ":${PATH}:" in
         *":${BIN_DIR}:"*) ;;
@@ -195,6 +201,7 @@ main() {
     echo "  one step:   export CLIQUE_SERVER=$CLIQUE_SERVER"
     echo "              clique            # buttons: Host Join Chat Dashboard"
     echo "  (headless:  clique join --server $CLIQUE_SERVER --runtime echo --param-b 7)"
+    echo "  agents:     clique mcp status  # clique tools in Claude Code/Codex/Cursor"
     echo ""
 }
 
