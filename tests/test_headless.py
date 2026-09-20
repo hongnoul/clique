@@ -147,6 +147,39 @@ async def test_clique_reports_protocol_and_sha(headless_server):
     from common import protocol as _proto
     assert info["protocol_version"] == _proto.PROTOCOL_VERSION
     assert isinstance(info.get("server_sha"), str) and info["server_sha"]
+    # zero-context field is always present (None when no tunnel is up)
+    assert "public_url" in info
+
+
+def test_public_url_sources(monkeypatch, tmp_path):
+    """_public_url: env wins, then ~/.clique/public_url, else None."""
+    from scheduler.server import _public_url
+
+    monkeypatch.setenv("CLIQUE_PUBLIC_URL", "https://named.example.com/")
+    assert _public_url() == "https://named.example.com"
+
+    monkeypatch.delenv("CLIQUE_PUBLIC_URL")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    from pathlib import Path
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    assert _public_url() is None
+    (tmp_path / ".clique").mkdir()
+    (tmp_path / ".clique" / "public_url").write_text(
+        "https://random.trycloudflare.com\n")
+    assert _public_url() == "https://random.trycloudflare.com"
+    # garbage (e.g. partial tunnel log write) is ignored, not served
+    (tmp_path / ".clique" / "public_url").write_text("starting...\n")
+    assert _public_url() is None
+
+
+async def test_index_advertises_public_url(headless_server, monkeypatch):
+    """/ shows the 'anywhere' one-liner when a tunnel URL exists,
+    and every join one-liner fails fast with --connect-timeout."""
+    body, _ = await afetch(headless_server, "/")
+    # fail-fast requirement: no bare curl one-liner that can hang forever
+    for line in body.splitlines():
+        if "/join.sh | sh" in line:
+            assert "--connect-timeout" in line, f"hangable one-liner: {line}"
 
 
 async def test_repo_bundle_serves_git_history(headless_server):
@@ -487,9 +520,13 @@ def test_home_normalize_server():
     assert normalize_server(" http://x:1/ ") == "http://x:1"
 
 
-async def test_home_app_boots_headless():
+async def test_home_app_boots_headless(monkeypatch):
     """Home screen boots in pilot mode: 7 buttons, 2 inputs, graceful status."""
     from textual.widgets import Button, Input, Static
+
+    # hermetic: ignore this machine's real ~/.clique pidfiles
+    import client.daemon as _daemon
+    monkeypatch.setattr(_daemon, "status", lambda *a, **k: None)
 
     from client.home import HomeApp
 
