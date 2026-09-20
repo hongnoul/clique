@@ -112,11 +112,15 @@ class SchedulerServer:
         self.vcs.init()
         # code-edit: canonical user-code repo + ephemeral workspaces.
         # Separate from state-repo (server audit history).
+        from scheduler.ledger import Ledger
         from scheduler.workspaces import WorkspaceManager
         self.code_vcs = VcsService(config.node.data_dir / "code-repo")
         self.code_vcs.init()
         self.workspaces = WorkspaceManager(
             config.node.data_dir / "workspaces")
+        self.ledger = Ledger(db)
+        self.vcs.register("ledger.json", self.ledger.export_state)
+        self.race_groups: dict[str, list[str]] = {}  # race_id -> task_ids
         self.permissions.on_change(
             lambda action, actor, target: self.vcs.snapshot(
                 f"{action} {target or ''} by {actor[:8]}", actor))
@@ -273,6 +277,7 @@ class SchedulerServer:
         async def stats() -> dict:
             s = self.router.queue_stats()
             s["nodes"] = {n.node_id: n.status.value for n in self.registry.list_nodes()}
+            s["ledger"] = self.ledger.summary()
             return s
 
         # ------------------------------------------------ headless curl flow
@@ -415,6 +420,10 @@ class SchedulerServer:
             if committed:
                 self.progress.pop(result.task_id, None)
                 view = self.router.get_task(result.task_id)
+                if view is not None and view.state.value in (
+                        "succeeded", "failed", "cancelled", "expired"):
+                    self.ledger.record(view)
+                    self._settle_race(view)
                 sid = view.request.session_id if view else None
                 if sid and result.state == TaskState.SUCCEEDED and result.output:
                     version = self.contexts.latest_version(sid)
@@ -535,6 +544,52 @@ class SchedulerServer:
         result.applied_sha = sha
         return result
 
+    # ------------------------------------------------------- race + upkeep
+
+    def _settle_race(self, view) -> None:
+        """Cancel sibling tasks when a race member is accepted.
+
+        Race members share an idempotency_key prefix ``race:<id>``.
+        First harness-accepted patch wins; siblings are cancelled and
+        their workspaces cleaned. Fire-and-forget: revokes go out on the
+        next schedule tick via cancel().
+        """
+        key = view.request.idempotency_key
+        if not key.startswith("race:"):
+            return
+        race_id = key.split(":", 2)[1] if ":" in key else ""
+        members = self.race_groups.get(race_id, [])
+        if not members:
+            return
+        accepted = (view.state.value == "succeeded" and view.result
+                    and view.result.applied_sha)
+        if not accepted:
+            return
+        for tid in members:
+            if tid == view.request.task_id:
+                continue
+            if self.router.cancel(tid):
+                self.workspaces.cleanup(tid)
+                self.progress.pop(tid, None)
+        del self.race_groups[race_id]
+
+    def gc_workspaces(self, older_than_s: float = 3600.0) -> int:
+        """Remove orphaned workspaces (no live task). Returns count."""
+        import time as _time
+        live = {v.request.task_id for v in self.router.list_tasks()}
+        removed = 0
+        for child in self.workspaces.base_dir.iterdir():
+            if not child.is_dir() or child.name in live:
+                continue
+            try:
+                age = _time.time() - child.stat().st_mtime
+            except OSError:
+                continue
+            if age > older_than_s:
+                self.workspaces.cleanup(child.name)
+                removed += 1
+        return removed
+
     # ---------------------------------------------------------------- loops
 
     async def _schedule_now(self) -> None:
@@ -614,6 +669,7 @@ class SchedulerServer:
                 if now - last_snapshot > snapshot_every:
                     last_snapshot = now
                     self.vcs.snapshot("periodic state snapshot", "server")
+                    self.gc_workspaces()
                 await self._schedule_now()
             except Exception:
                 log.exception("tick failed")

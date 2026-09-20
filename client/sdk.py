@@ -121,6 +121,18 @@ class CliqueClient:
     async def code_tests(self, task_id: str) -> dict:
         return await self._get(f"/v1/code/tasks/{task_id}/tests")
 
+    async def code_race(self, prompt: str, files: dict[str, str],
+                        fanout: int = 2,
+                        test_cmd: list[str] | None = None) -> dict:
+        return await self._post("/v1/code/race", {
+            "prompt": prompt,
+            "code": {"files": files,
+                     "test_cmd": test_cmd or ["pytest", "-q"]},
+            "fanout": fanout})
+
+    async def ledger(self) -> dict:
+        return await self._get("/v1/ledger")  # type: ignore[return-value]
+
     # -- clique views ----------------------------------------------------------
 
     async def nodes(self) -> list[NodeInfo]:

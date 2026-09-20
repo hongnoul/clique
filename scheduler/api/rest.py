@@ -428,6 +428,36 @@ def register_extended_routes(app: "FastAPI", server: "SchedulerServer") -> None:
                 "test_report": result.test_report if result else None,
                 "state": view.state.value}
 
+    @app.post("/v1/code/race")
+    async def code_race(body: dict) -> dict:
+        """Fan out one CodeTaskSpec to N parallel tasks (replica race).
+
+        Body: {prompt, code, fanout=2}. Each member gets idempotency_key
+        ``race:<race_id>:<i>``. First harness-accepted patch wins; the
+        server cancels siblings on accept. Returns {race_id, task_ids}.
+        """
+        import copy
+        prompt = body.get("prompt", "")
+        spec = body.get("code")
+        if not prompt or not spec:
+            raise HTTPException(422, "prompt and code required")
+        fanout = max(1, min(int(body.get("fanout", 2)), 8))
+        race_id = uuid.uuid4().hex[:12]
+        task_ids = []
+        for i in range(fanout):
+            member = copy.deepcopy(body)
+            member["task_type"] = "code_edit"
+            member["idempotency_key"] = f"race:{race_id}:{i}"
+            request = TaskRequest.model_validate(member)
+            task_ids.append(await server.submit_task(request))
+        server.race_groups[race_id] = task_ids
+        return {"race_id": race_id, "task_ids": task_ids}
+
+    @app.get("/v1/ledger")
+    async def ledger() -> dict:
+        """Accepted-work accounting: totals, per-node earnings, states."""
+        return server.ledger.summary()
+
     # ------------------------------------------------------------ model mirror
 
     @app.get("/models/{artifact}")

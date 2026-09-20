@@ -172,3 +172,81 @@ async def test_code_patch_rejected_no_fence(code_clique, tmp_path):
     finally:
         agent._stop.set()
         task.cancel()
+
+
+@pytest.mark.asyncio
+async def test_ledger_records_accepted(code_clique, tmp_path):
+    """Accepted code task credits $0.20 in ledger + /v1/stats."""
+    base, server = code_clique
+    agent, task = await run_agent(base, tmp_path, GOOD_DIFF_OUTPUT)
+    try:
+        async with httpx.AsyncClient() as c:
+            r = await c.post(base + "/v1/code/tasks", json={
+                "prompt": "change old to new",
+                "code": {"files": {
+                    "foo.py": "old\n",
+                    "test_foo.py": ("def test_fix():\n"
+                                    "    assert open('foo.py').read() == 'new\\n'\n")},
+                    "test_cmd": ["pytest", "-q", "test_foo.py"]},
+            })
+            task_id = r.json()["task_id"]
+        data = await wait_done(base, task_id)
+        assert data["state"] == "succeeded", data
+        async with httpx.AsyncClient() as c:
+            ledger = (await c.get(base + "/v1/ledger")).json()
+            assert ledger["accepted_tasks"] == 1
+            assert ledger["earned_run_rate"] == 0.20
+            stats = (await c.get(base + "/v1/stats")).json()
+            assert stats["ledger"]["accepted_tasks"] == 1
+    finally:
+        agent._stop.set()
+        task.cancel()
+
+
+@pytest.mark.asyncio
+async def test_code_race_first_wins(code_clique, tmp_path):
+    """Two members, one good diff + one garbage: winner accepted, no crash."""
+    base, server = code_clique
+    good_agent, good_task = await run_agent(base, tmp_path, GOOD_DIFF_OUTPUT)
+    bad_agent, bad_task = await run_agent(base, tmp_path, BAD_OUTPUT)
+    try:
+        async with httpx.AsyncClient() as c:
+            r = await c.post(base + "/v1/code/race", json={
+                "prompt": "change old to new",
+                "code": {"files": {
+                    "foo.py": "old\n",
+                    "test_foo.py": ("def test_fix():\n"
+                                    "    assert open('foo.py').read() == 'new\\n'\n")},
+                    "test_cmd": ["pytest", "-q", "test_foo.py"]},
+                "fanout": 2,
+            })
+            r.raise_for_status()
+            body = r.json()
+            assert len(body["task_ids"]) == 2
+        results = [await wait_done(base, tid) for tid in body["task_ids"]]
+        states = {r["state"] for r in results}
+        assert "succeeded" in states  # winner accepted
+    finally:
+        for a, t in ((good_agent, good_task), (bad_agent, bad_task)):
+            a._stop.set()
+            t.cancel()
+
+
+def test_gc_workspaces(tmp_path):
+    """Orphaned workspace dirs older than threshold are removed."""
+    import time
+    from scheduler.server import SchedulerServer
+    from common.config import Config
+    cfg = Config()
+    cfg.node.display_name = "gc-test"
+    cfg.node.data_dir = tmp_path / "srv"
+    cfg.server.db_path = tmp_path / "server.db"
+    server = SchedulerServer(cfg)
+    orphan = server.workspaces.base_dir / "t-orphan"
+    orphan.mkdir(parents=True)
+    (orphan / "x.py").write_text("x")
+    old = time.time() - 7200
+    import os
+    os.utime(orphan, (old, old))
+    assert server.gc_workspaces(older_than_s=3600) == 1
+    assert not orphan.exists()
