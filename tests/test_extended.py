@@ -481,6 +481,9 @@ async def test_web_dashboard_served(clique):
         r = await c.get(base + "/dash")
     assert r.status_code == 200
     assert "clique dashboard" in r.text
+    # click-to-watch live output must be wired, not orphan markup
+    for needle in ("watchTask", "/ws/tasks/", "liveOut", "stopWatch"):
+        assert needle in r.text, f"dashboard missing {needle}"
 
 
 # -------------------------------------------------------------------- sdk auth

@@ -21,6 +21,10 @@
   .op { color: #d2a8ff; } .owner { color: #ffa657; }
   .sugg { border-left: 3px solid #d29922; padding-left: .6rem; margin: .4rem 0; }
   #events { max-height: 14rem; overflow-y: auto; font-size: .72rem; color: #8b949e; }
+  #liveOut { max-height: 16rem; overflow-y: auto; font-size: .78rem;
+             white-space: pre-wrap; word-break: break-word; }
+  tr.live { cursor: pointer; } tr.live:hover td { background: #21262d; }
+  tr.watching td { background: #1c2b1c; }
   .muted { color: #8b949e; }
 </style>
 </head>
@@ -28,7 +32,11 @@
 <h1>clique <span id="cliqueName" class="muted"></span></h1>
 <div class="grid">
   <div class="card"><h2>Devices</h2><div id="nodes"></div></div>
-  <div class="card"><h2>Queue</h2><div id="tasks"></div></div>
+  <div class="card"><h2>Queue</h2><div id="tasks"></div>
+    <span class="muted">click a running task to watch its live output</span></div>
+  <div class="card" style="grid-column: 1 / -1"><h2>Live output
+    <span id="liveTask" class="muted"></span></h2>
+    <div id="liveOut"><span class="muted">no task watched</span></div></div>
   <div class="card"><h2>Sessions</h2><div id="sessions"></div></div>
   <div class="card"><h2>Suggestions</h2><div id="suggestions"></div></div>
   <div class="card"><h2>Live workspaces</h2><div id="workspaces"></div></div>
@@ -65,9 +73,20 @@ async function refresh() {
         .join('') + '</table>';
     $('tasks').innerHTML = '<table><tr><th>id</th><th>state</th><th>node</th>'
       + '<th>type</th></tr>'
-      + tasks.slice(0, 12).map(t => `<tr><td>${t.request.task_id.slice(0,10)}</td>`
-        + `<td>${t.state}</td><td>${t.assigned_node ? t.assigned_node.slice(0,8) : '-'}</td>`
-        + `<td>${t.request.task_type}</td></tr>`).join('') + '</table>';
+      + tasks.slice(0, 12).map((t) => {
+        const id = t.request.task_id;
+        const clickable = (t.state === 'assigned' || t.state === 'running')
+          ? ` class="live${id === watching ? ' watching' : ''}" data-task="${id}"` : '';
+        return `<tr${clickable}><td>${id.slice(0, 10)}</td>`
+          + `<td>${t.state}</td><td>${t.assigned_node ? t.assigned_node.slice(0, 8) : '-'}</td>`
+          + `<td>${t.request.task_type}</td></tr>`;
+      }).join('') + '</table>';
+    document.querySelectorAll('tr.live').forEach((tr) => {
+      tr.onclick = () => watchTask(tr.dataset.task);
+    });
+    if (watching && !tasks.some((t) => t.request.task_id === watching)) {
+      stopWatch(' (done)');
+    }
     $('sessions').innerHTML = sessions.length
       ? '<table><tr><th>id</th><th>cluster</th><th>pinned</th><th>v</th></tr>'
         + sessions.map(s => `<tr><td>${s.session_id}</td><td>${s.cluster_key || '-'}</td>`
@@ -95,6 +114,46 @@ async function refresh() {
           + `<td>${w.seq}</td></tr>`).join('') + '</table>'
       : '<span class="muted">none active</span>';
   } catch (e) { console.error(e); }
+}
+
+let watching = null;
+let watchWs = null;
+
+function showLive(text) {
+  $('liveOut').textContent = text;
+}
+
+async function watchTask(taskId) {
+  stopWatch();
+  watching = taskId;
+  $('liveTask').textContent = `· watching ${taskId.slice(0, 10)}`;
+  showLive('connecting...');
+  try {
+    const cur = await j(`/v1/tasks/${taskId}`);
+    showLive(cur.partial_output
+      || (cur.result && cur.result.output) || '(no output yet)');
+  } catch (e) { showLive(`(fetch failed: ${e})`); return; }
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  const ws = new WebSocket(`${proto}://${location.host}/ws/tasks/${taskId}`);
+  watchWs = ws;
+  ws.onmessage = async () => {
+    try {
+      const now = await j(`/v1/tasks/${taskId}`);
+      showLive(now.partial_output
+        || (now.result && now.result.output) || $('liveOut').textContent);
+    } catch (e) { /* keep last text on transient failure */ }
+  };
+  ws.onclose = () => {
+    if (watchWs !== ws) return;
+    $('liveTask').textContent += ' (done)';
+    watchWs = null;
+  };
+}
+
+function stopWatch(suffix = '') {
+  if (watchWs) { const ws = watchWs; watchWs = null; ws.close(); }
+  if (suffix && watching) $('liveTask').textContent += suffix;
+  watching = null;
 }
 
 function connectEvents() {
