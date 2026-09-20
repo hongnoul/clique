@@ -98,6 +98,8 @@ class NodeInfo(BaseModel):
     joined_at: datetime = Field(default_factory=utcnow)
     last_heartbeat_at: datetime | None = None
     current_task_id: str | None = None
+    offline_since: datetime | None = None
+    last_task_duration_s: float = 0.0  # age of current_task_id when it went offline
 
 
 class Cluster(BaseModel):

@@ -70,14 +70,24 @@ class NodeAgent:
                 f"({self.config.node.openai_base_url})")
         await self.register()
         backoff = 1.0
+        disconnected_since: float | None = None
+        giveup_after = self.config.node.reconnect_giveup_s
         while not self._stop.is_set():
             try:
                 async with websockets.connect(
                         f"{self.ws_url}?token={self.token}", max_size=None) as ws:
                     backoff = 1.0
+                    disconnected_since = None
                     await self._session(ws)
             except (OSError, websockets.WebSocketException) as e:
                 if self._stop.is_set():
+                    return
+                if disconnected_since is None:
+                    disconnected_since = time.monotonic()
+                down_for = time.monotonic() - disconnected_since
+                if giveup_after and down_for > giveup_after:
+                    log.warning("server unreachable for %.0fs (> %.0fs); giving up",
+                               down_for, giveup_after)
                     return
                 log.warning("connection lost (%s); retry in %.0fs", e, backoff)
                 await asyncio.sleep(backoff)
@@ -105,6 +115,10 @@ class NodeAgent:
                 elif msg["type"] == protocol.REVOKE:
                     if msg["task_id"] == self.current_task_id:
                         await self.runtime.cancel()
+                elif msg["type"] == protocol.SHUTDOWN:
+                    log.info("server is shutting down (%s); disconnecting",
+                             msg.get("reason", ""))
+                    await self.stop(drain=False, reason=msg.get("reason", "server shutdown"))
         finally:
             hb.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -149,13 +163,22 @@ class NodeAgent:
                 status.value, res.probe(), self.current_task_id, self.model)))
             await asyncio.sleep(self.config.node.heartbeat_interval_s)
 
-    async def stop(self, drain: bool = True) -> None:
+    async def stop(self, drain: bool = True, reason: str = "operator disconnect") -> None:
+        """Graceful shutdown: optionally finish the in-flight task, tell the
+        server we're leaving (so it drops us and requeues our task
+        immediately instead of waiting out the heartbeat timeout), then
+        close the connection."""
         self._stop.set()
         if drain and self._task_job:
             with contextlib.suppress(Exception):
                 await self._task_job
         else:
             await self.runtime.cancel()
+        if self._ws is not None:
+            with contextlib.suppress(Exception):
+                await self._ws.send(protocol.dumps(protocol.msg_leave(reason)))
+            with contextlib.suppress(Exception):
+                await self._ws.close()
 
     async def kill(self) -> None:
         """Abrupt death (crash simulation / immediate quit): no drain,
@@ -182,6 +205,7 @@ async def resolve_server(explicit: str | None, timeout_s: float = 5.0) -> str:
 
 def main() -> None:
     import argparse
+    import signal
     parser = argparse.ArgumentParser("clique-agent")
     parser.add_argument("--server", help="server URL (skip mDNS discovery)")
     parser.add_argument("--name", help="override display name")
@@ -205,10 +229,30 @@ def main() -> None:
     async def run() -> None:
         server_url = await resolve_server(args.server)
         agent = NodeAgent(config, server_url)
+        loop = asyncio.get_running_loop()
+        disconnecting = False
+
+        def on_signal() -> None:
+            nonlocal disconnecting
+            if disconnecting:
+                log.warning("forcing immediate disconnect (dropping any in-flight task)")
+                asyncio.ensure_future(agent.kill())
+                return
+            disconnecting = True
+            log.info("disconnecting: finishing any in-flight task and leaving "
+                     "the clique... (send the signal again to force quit)")
+            asyncio.ensure_future(agent.stop())
+
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            with contextlib.suppress(NotImplementedError):
+                loop.add_signal_handler(sig, on_signal)
+
         try:
             await agent.run()
         except KeyboardInterrupt:
+            # only reached where add_signal_handler isn't available (Windows)
             await agent.stop()
+        log.info("disconnected from %s", server_url)
 
     asyncio.run(run())
 

@@ -151,7 +151,8 @@ def register_extended_routes(app: "FastAPI", server: "SchedulerServer") -> None:
             server.permissions.check(actor, "kick_node")
         except PermissionError_ as e:
             raise HTTPException(403, str(e))
-        if server.registry.get(node_id) is None:
+        info = server.registry.get(node_id)
+        if info is None:
             raise HTTPException(404, "no such node")
         ws = server.conns.get(node_id)
         if ws is not None:
@@ -159,13 +160,39 @@ def register_extended_routes(app: "FastAPI", server: "SchedulerServer") -> None:
                 await ws.close(code=4403)
             except Exception:
                 pass
-        server.registry.remove(node_id)
+        task_age = (server.router.task_age_s(info.current_task_id)
+                   if info.current_task_id else 0.0)
+        server.registry.remove(node_id, task_age)
         for tid in server.router.on_node_lost(node_id):
             pass  # requeued
         server.tokens = {t: n for t, n in server.tokens.items() if n != node_id}
         server.permissions.record(actor, "kick_node", node_id)
         await server.events.publish("node.kicked", {"node_id": node_id})
         return {"kicked": node_id}
+
+    # ---------------------------------------------------------------- server
+
+    @app.post("/v1/server/shutdown")
+    async def shutdown(body: dict, request: Request) -> dict:
+        """Stop the server -- from any node, not just its own machine.
+        Refuses (409) with the list of active tasks unless confirm=true,
+        so a caller (the CLI) can warn and ask before anything is killed."""
+        actor = _actor(server, request)
+        try:
+            server.permissions.check(actor, "shutdown_server")
+        except PermissionError_ as e:
+            raise HTTPException(403, str(e))
+        active = await server.shutdown_active_tasks()
+        if active and not body.get("confirm"):
+            raise HTTPException(409, {
+                "error": "nodes are actively running tasks",
+                "active": active,
+            })
+        server.permissions.record(actor, "shutdown_server", None,
+                                  detail=f"{len(active)} active task(s) killed")
+        await server.events.publish("server.shutdown", {"actor": actor})
+        asyncio.create_task(server.shutdown_now())
+        return {"shutting_down": True, "active_tasks_killed": len(active)}
 
     # -------------------------------------------------------------------- cron
 

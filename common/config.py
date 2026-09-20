@@ -31,6 +31,10 @@ class NodeConfig:
     allow_battery_inference: bool = True
     heartbeat_interval_s: float = 2.0
     agent_port: int = 0  # 0 = agent does not listen; server pushes over WS
+    # give up and exit if the server stays unreachable this long (0 = retry
+    # forever); mirrors server.reap_grace_max_s, but isn't task-scaled --
+    # once disconnected, an in-flight task already fails on its next send
+    reconnect_giveup_s: float = 3600.0
 
 
 @dataclass
@@ -40,6 +44,11 @@ class ServerConfig:
     db_path: Path = DEFAULT_DIR / "server.db"
     default_model: str = "qwen2.5-coder-7b"
     heartbeat_offline_after: int = 3
+    # grace period before an offline node is deleted from the roster,
+    # equal to how long its last task had been running (so a node mid a
+    # long task gets more time to reconnect than an idle one, which gets
+    # none): grace = min(task_age_s, reap_grace_max_s)
+    reap_grace_max_s: float = 3600.0
     queue_cap: int = 1000
     lease_seconds: float = 120.0
     max_attempts: int = 3
@@ -90,8 +99,10 @@ def write_default(path: Path) -> None:
         '# openai_base_url = "http://127.0.0.1:11434/v1"\n'
         '# openai_model_name = "qwen2.5-coder:7b"\n'
         "# model_parameter_b = 7.0\n"
+        "# reconnect_giveup_s = 3600.0     # give up if server unreachable this long\n"
         "\n[server]\n"
         "# api_port = 7777\n"
+        "# reap_grace_max_s = 3600.0       # cap on reap grace (= last task's age)\n"
     )
 
 

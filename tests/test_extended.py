@@ -270,7 +270,9 @@ async def test_kick_requires_op_and_removes_node(clique):
         r = await c.post(f"{base}/v1/nodes/{big.node_id}/kick", headers=op_hdr)
         assert r.status_code == 200
         info = server.registry.get(big.node_id)
-        assert info.status.value == "offline"
+        # idle (no task in flight) -> zero reap grace, so it may already be
+        # gone by the time we check, not just marked offline
+        assert info is None or info.status.value == "offline"
 
 
 # ----------------------------------------------------------------------- cron
