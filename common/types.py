@@ -128,23 +128,48 @@ class CodeTaskSpec(BaseModel):
     use_tools: bool = False  # node-local tool loop (capable models only)
 
 
+class ChatMessage(BaseModel):
+    """One chat turn on the worker wire (OpenAI-style role/content)."""
+
+    role: str
+    content: str
+
+
 class TaskRequest(BaseModel):
     task_id: str = ""
     submitted_by_node: str = ""
     task_type: TaskType = TaskType.CHAT
     prompt: str
+    messages: list[ChatMessage] | None = None
     session_id: str | None = None
     model_hint: str | None = None  # cluster_key prefix; hard filter when set (omit for auto)
     workspace_id: str | None = None  # live collab workspace (file mirror)
     workspace_seq: int = 0  # seq the prompt snapshot was taken at
     max_output_tokens: int = 1024
+    # False for internal jobs (compaction) so submit/result do not append chat turns
+    record_turns: bool = True
+    # [lo, hi] context_version range a compaction job summarized
+    compaction_covers: list[int] | None = None
     idempotency_key: str
     created_at: datetime = Field(default_factory=utcnow)
     code: CodeTaskSpec | None = None
 
     def est_prompt_tokens(self, text: str | None = None) -> int:
-        src = self.prompt if text is None else text
+        if text is not None:
+            src = text
+        elif self.messages:
+            src = "\n".join(f"{m.role}: {m.content}" for m in self.messages)
+        else:
+            src = self.prompt
         return max(1, len(src) // 4)
+
+    def relays_session_stream(self) -> bool:
+        """True when token deltas belong on /ws/sessions/{id}.
+
+        Internal jobs (compaction) keep session_id for routing but must
+        not leak into the chat transcript stream.
+        """
+        return bool(self.session_id and self.record_turns)
 
 
 class TaskAssignment(BaseModel):

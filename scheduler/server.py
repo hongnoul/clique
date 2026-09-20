@@ -30,7 +30,9 @@ from fastapi.responses import PlainTextResponse
 
 from common import protocol
 from common.config import Config
+from common.errors import SessionConflictError
 from common.types import (
+    ChatMessage,
     ModelSpec,
     NodeRole,
     NodeStatus,
@@ -38,13 +40,14 @@ from common.types import (
     TaskRequest,
     TaskResult,
     TaskState,
+    TaskType,
     node_id_from_public_key,
     utcnow,
 )
 from scheduler.api.rest import register_extended_routes
 from scheduler.api.workspace_routes import register_workspace_routes
 from scheduler.api.ws import EventBroadcaster, register_ws_routes
-from scheduler.context_store import ContextStore
+from scheduler.context_store import ContextStore, summary_max_output_tokens
 from scheduler.cron import CronService
 from scheduler.permissions import PermissionManager
 from scheduler.registry import Registry
@@ -226,6 +229,7 @@ class SchedulerServer:
         self.conns = AgentConnections()
         self.tokens: dict[str, str] = {}  # token -> node_id
         self.progress: dict[str, str] = {}  # task_id -> accumulated text
+        self._compacting: set[str] = set()
         self._tick_task: asyncio.Task | None = None
 
         # extended subsystems (P2/P3)
@@ -303,9 +307,12 @@ class SchedulerServer:
                 session = self.sessions.get(request.session_id)
             except KeyError:
                 raise HTTPException(404, "no such session")
-            version = self.contexts.latest_version(request.session_id)
-            self.sessions.append_turn(
-                request.session_id, version, "user", raw_code_prompt)
+            if request.record_turns:
+                try:
+                    self.sessions.append_turn_latest(
+                        request.session_id, "user", raw_code_prompt)
+                except SessionConflictError as e:
+                    raise HTTPException(409, str(e)) from e
             if not request.model_hint and session.cluster_key:
                 request.model_hint = session.cluster_key
         try:
@@ -315,6 +322,79 @@ class SchedulerServer:
         await self.events.publish("task.submitted", {"task_id": task_id})
         await self._schedule_now()
         return task_id
+
+    def _session_window(self, session_id: str, fallback: int = 8192) -> int:
+        try:
+            session = self.sessions.get(session_id)
+        except KeyError:
+            return fallback
+        candidates = []
+        if session.pinned_node:
+            candidates.append(session.pinned_node)
+        for n in self.registry.list_nodes():
+            if n.node_id in candidates:
+                continue
+            if session.cluster_key and n.model is not None \
+                    and n.model.cluster_key().startswith(session.cluster_key):
+                candidates.append(n.node_id)
+        for nid in candidates:
+            node = self.registry.get(nid)
+            if node and node.model:
+                return node.model.context_window
+        return fallback
+
+    def _commit_compaction(self, session_id: str, content: str,
+                           covers: list[int]) -> None:
+        self.sessions.append_compaction_latest(session_id, content, covers)
+
+    async def _maybe_compact(self, session_id: str,
+                             max_output_tokens: int) -> None:
+        """Enqueue one summarization job if older turns no longer fit.
+
+        ``max_output_tokens`` is the triggering *chat* turn's cap, used
+        only to detect overflow. The job's own generation cap is a
+        slice of the model window.
+        """
+        if session_id in self._compacting:
+            return
+        window = self._session_window(session_id)
+        plan = self.contexts.compaction_plan(
+            session_id, window, max_output_tokens)
+        if plan is None:
+            return
+        try:
+            session = self.sessions.get(session_id)
+        except KeyError:
+            return
+        self._compacting.add(session_id)
+        messages = [ChatMessage.model_validate(m) for m in plan["messages"]]
+        prompt = "\n".join(f"{m.role}: {m.content}" for m in messages)
+        prompt_tokens = max(1, len(prompt) // 4)
+        request = TaskRequest(
+            prompt=prompt,
+            messages=messages,
+            session_id=session_id,
+            model_hint=session.cluster_key or None,
+            task_type=TaskType.SUMMARIZATION,
+            record_turns=False,
+            compaction_covers=plan["covers"],
+            max_output_tokens=summary_max_output_tokens(
+                window, prompt_tokens),
+            idempotency_key=(
+                f"compact:{session_id}:{plan['covers'][1]}:"
+                f"{self.contexts.latest_version(session_id)}"),
+        )
+        try:
+            task_id = self.router.submit(request)
+        except OverflowError:
+            self._compacting.discard(session_id)
+            return
+        await self.events.publish(
+            "session.compacting",
+            {"session_id": session_id, "task_id": task_id,
+             "covers": plan["covers"]},
+            topic=f"session:{session_id}")
+        await self._schedule_now()
 
     # ------------------------------------------------------------------ app
 
@@ -637,7 +717,7 @@ class SchedulerServer:
                 {"task_id": tid, "delta": msg["text_delta"]},
                 topic=f"task:{tid}")
             view = self.router.get_task(tid)
-            if view and view.request.session_id:
+            if view and view.request.relays_session_stream():
                 await self.events.publish(
                     "session.delta",
                     {"task_id": tid, "delta": msg["text_delta"]},
@@ -663,16 +743,43 @@ class SchedulerServer:
                 if wid:
                     with contextlib.suppress(Exception):
                         await self.live_workspaces.force_flush(wid)
-                sid = view.request.session_id if view else None
-                if sid and result.state == TaskState.SUCCEEDED and result.output:
-                    version = self.contexts.latest_version(sid)
-                    self.sessions.append_turn(
-                        sid, version, "assistant", result.output)
-                    self.sessions.pin(sid, node_id)
-                    await self.events.publish(
-                        "session.turn", {"session_id": sid,
-                                         "task_id": result.task_id},
-                        topic=f"session:{sid}")
+                req = view.request if view else None
+                sid = req.session_id if req else None
+                if (sid and result.state == TaskState.SUCCEEDED
+                        and result.output and req is not None):
+                    if (not req.record_turns
+                            and req.task_type == TaskType.SUMMARIZATION):
+                        try:
+                            self._commit_compaction(
+                                sid, result.output, req.compaction_covers or [])
+                        except SessionConflictError:
+                            log.warning(
+                                "compaction turn lost to version conflict "
+                                "on session %s", sid)
+                        else:
+                            await self.events.publish(
+                                "session.compacted",
+                                {"session_id": sid, "task_id": result.task_id},
+                                topic=f"session:{sid}")
+                        self._compacting.discard(sid)
+                    elif req.record_turns:
+                        try:
+                            self.sessions.append_turn_latest(
+                                sid, "assistant", result.output)
+                        except SessionConflictError:
+                            log.warning(
+                                "assistant turn lost to version conflict "
+                                "on session %s", sid)
+                        else:
+                            self.sessions.pin(sid, node_id)
+                            await self.events.publish(
+                                "session.turn", {"session_id": sid,
+                                                 "task_id": result.task_id},
+                                topic=f"session:{sid}")
+                            await self._maybe_compact(sid, req.max_output_tokens)
+                elif (sid and req is not None and not req.record_turns
+                      and result.state != TaskState.SUCCEEDED):
+                    self._compacting.discard(sid)
                 await self.events.publish("task.finished", {
                     "task_id": result.task_id, "state": result.state.value,
                     "node_id": node_id})
