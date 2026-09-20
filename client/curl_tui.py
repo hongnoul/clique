@@ -34,10 +34,29 @@ DEFAULT_SERVER = os.environ.get("CLIQUE_SERVER", "http://127.0.0.1:7777")
 TIMEOUT_S = 5.0
 
 
+def _tls_context(url: str):
+    """certifi CA bundle when available; stdlib default otherwise.
+
+    Some Pythons ship without usable system certs; a public https
+    server (tunnel) would fail verify there. Stays stdlib-safe: certifi
+    is optional here because this file is served as a zero-install TUI.
+    """
+    if not url.startswith("https"):
+        return None
+    import ssl
+    try:
+        import certifi
+        return ssl.create_default_context(cafile=certifi.where())
+    except Exception:
+        return ssl.create_default_context()
+
+
 def fetch_json(base: str, path: str):
     url = base.rstrip("/") + path
     try:
-        with urllib.request.urlopen(url, timeout=TIMEOUT_S) as r:
+        ctx = _tls_context(url)
+        kw = {"context": ctx} if ctx is not None else {}
+        with urllib.request.urlopen(url, timeout=TIMEOUT_S, **kw) as r:
             return json.loads(r.read().decode())
     except (urllib.error.URLError, OSError, ValueError) as e:
         return {"_error": f"{path}: {e}"}

@@ -545,7 +545,9 @@ def dash(server: str = typer.Option(None),
 
     def fetch(path: str) -> str:
         try:
-            with urllib.request.urlopen(base + path, timeout=5) as r:
+            from common.tls import urlopen_kwargs
+            with urllib.request.urlopen(base + path, timeout=5,
+                                        **urlopen_kwargs(base)) as r:
                 return r.read().decode()
         except Exception as e:
             return f"{path}: unreachable ({e})"
@@ -847,7 +849,9 @@ def onboard(server: str = typer.Option(None, help="clique server URL (or $CLIQUE
 
     def _get(path: str, base: str = srv, timeout: float = 5.0) -> dict | None:
         try:
-            with _url.urlopen(base + path, timeout=timeout) as r:
+            from common.tls import urlopen_kwargs
+            with _url.urlopen(base + path, timeout=timeout,
+                              **urlopen_kwargs(base)) as r:
                 return _json.loads(r.read().decode())
         except Exception:
             return None

@@ -202,10 +202,14 @@ class CliqueClient:
         import websockets as _ws
 
         ws_url = self.base_url.replace("http", "ws", 1) + f"/ws/tasks/{task_id}"
+        wskw: dict = {}
+        if ws_url.startswith("wss"):
+            from common.tls import client_ssl_context
+            wskw["ssl"] = client_ssl_context()
         deadline = asyncio.get_event_loop().time() + timeout_s
         shown = 0
         try:
-            async with _ws.connect(ws_url, max_size=None) as sock:
+            async with _ws.connect(ws_url, max_size=None, **wskw) as sock:
                 while True:
                     try:
                         raw = await asyncio.wait_for(

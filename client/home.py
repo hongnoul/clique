@@ -47,8 +47,10 @@ def probe_server_sync(base: str, timeout_s: float = 4.0) -> dict | None:
     import urllib.request as _url
 
     try:
+        from common.tls import urlopen_kwargs
         with _url.urlopen(base.rstrip("/") + "/v1/clique",
-                           timeout=timeout_s) as r:
+                           timeout=timeout_s,
+                           **urlopen_kwargs(base)) as r:
             data = _json.loads(r.read().decode())
             return data if isinstance(data, dict) else None
     except Exception:
@@ -152,7 +154,9 @@ def detect_runtime_sync(base_url: str | None = None,
 
     def _get(path: str, base: str, timeout: float = 2.0) -> dict | None:
         try:
-            with _url.urlopen(base + path, timeout=timeout) as r:
+            from common.tls import urlopen_kwargs
+            with _url.urlopen(base + path, timeout=timeout,
+                              **urlopen_kwargs(base)) as r:
                 return _json.loads(r.read().decode())
         except Exception:
             return None

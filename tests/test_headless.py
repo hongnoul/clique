@@ -27,7 +27,9 @@ from common.config import Config
 from scheduler.server import SchedulerServer
 
 STDLIB_ONLY = {"argparse", "json", "os", "sys", "time", "curses",
-               "urllib.error", "urllib.request", "__future__"}
+               "urllib.error", "urllib.request", "__future__", "ssl",
+               # optional-only: guarded by try/except, degrades to stdlib
+               "certifi"}
 
 
 def free_port() -> int:
@@ -249,6 +251,25 @@ def test_setup_tunnel_sh_is_posix_clean():
     assert "trycloudflare" in src
     assert "public_url" in src        # feeds _public_url on the server
     assert "--connect-timeout" in src  # fail-fast download
+
+
+def test_tls_context_prefers_certifi():
+    """Zero-context joins go over public https; machines without system
+    certs (fresh python.org installs) must still verify via certifi."""
+    import ssl
+
+    import certifi
+
+    from common.tls import client_ssl_context, urlopen_kwargs
+
+    ctx = client_ssl_context()
+    assert isinstance(ctx, ssl.SSLContext)
+    assert ctx.verify_mode == ssl.CERT_REQUIRED  # never verify=off
+    # certifi's bundle actually loaded (a CA store is present)
+    assert ctx.cert_store_stats()["x509_ca"] > 0
+    assert certifi.where()  # dependency is declared, not incidental
+    assert "context" in urlopen_kwargs("https://x")
+    assert urlopen_kwargs("http://x") == {}
 
 
 def _assert_posix_clean(rel: str) -> str:

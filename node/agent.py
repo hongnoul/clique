@@ -77,8 +77,13 @@ class NodeAgent:
         giveup_after = self.config.node.reconnect_giveup_s
         while not self._stop.is_set():
             try:
+                wskw: dict = {}
+                if self.ws_url.startswith("wss"):
+                    from common.tls import client_ssl_context
+                    wskw["ssl"] = client_ssl_context()
                 async with websockets.connect(
-                        f"{self.ws_url}?token={self.token}", max_size=None) as ws:
+                        f"{self.ws_url}?token={self.token}", max_size=None,
+                        **wskw) as ws:
                     backoff = 1.0
                     disconnected_since = None
                     await self._session(ws)

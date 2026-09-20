@@ -19,6 +19,7 @@ dependencies = [
     "rich",
     "textual",
     "pynacl",
+    "certifi",
 ]
 
 [project.optional-dependencies]
