@@ -747,6 +747,34 @@ def workspace(list: bool = typer.Option(False, "--list", help="list workspaces")
     asyncio.run(run())
 
 
+@app.command(name="join-remote")
+def join_remote(host: str = typer.Argument(..., help="ssh target, e.g. gx10 or user@host"),
+                server: str = typer.Option(None, help="clique server URL (or $CLIQUE_SERVER)"),
+                ssh_opt: list[str] = typer.Option(None, "--ssh-opt", help="extra ssh opt, repeatable")) -> None:
+    """Join a headless box over ssh without exposing ssh to the UI.
+
+    SSH/Tailscale is pure transport hidden here: this runs
+    ``curl $SERVER/join.sh | sh`` on the remote and prints the join line.
+    No tokens pasted, no GitHub involved.
+    """
+    import os as _os
+    import subprocess as _sp
+    srv = server or _os.environ.get("CLIQUE_SERVER")
+    if not srv:
+        raise typer.BadParameter("pass --server or set CLIQUE_SERVER")
+    srv = srv if srv.startswith("http") else f"http://{srv}"
+    cmd = ["ssh"]
+    for o in (ssh_opt or []):
+        cmd += ["-o", o]
+    cmd += [host, f"curl -fsSL {srv}/join.sh | sh"]
+    console.print(f"[dim]joining {host} via hidden ssh transport...[/]")
+    rc = _sp.call(cmd)
+    if rc != 0:
+        raise typer.Exit(rc)
+    console.print(f"[green]installed on {host}[/]; then: ssh {host} "
+                  f"'clique join --server {srv} --runtime echo --param-b 7'")
+
+
 def main() -> None:
     app()
 
