@@ -205,12 +205,37 @@ def test_bootstrap_sh_is_posix_clean():
            / "bootstrap.sh").read_text()
     assert "GIT_TERMINAL_PROMPT=0" in src
     assert "CLIQUE_GITHUB_TOKEN" in src
+    assert "CLIQUE_SERVER" in src  # server-first source, GitHub is fallback
+    assert "fetch_server_bundle" in src
     assert "$'" not in src  # no bashisms: runs under POSIX sh
+    # BSD od separates bytes with two spaces, so the check must not
+    # rely on single-space "1f 8b" (never matches on macOS tarballs).
+    assert 'grep -q "1f 8b"' not in src
     proc = subprocess.run(
         ["sh", "-n", str(Path(__file__).resolve().parents[1]
                          / "scripts" / "bootstrap.sh")],
         capture_output=True, text=True, timeout=30)
     assert proc.returncode == 0, f"bootstrap.sh fails sh -n: {proc.stderr}"
+
+
+def test_gzip_magic_check_matches_bsd_od(tmp_path):
+    """The portable gzip check must match real gzip bytes (regression:
+    BSD od prints double spaces, so grep '1f 8b' never matched)."""
+    import gzip
+    import subprocess
+    gz = tmp_path / "x.tgz"
+    gz.write_bytes(gzip.compress(b"hello clique"))
+    for script in (
+        # bootstrap.sh server-bundle + tarball branches
+        ["sh", "-c", f"od -An -N2 -tx1 {gz} | tr -d ' \\n' | grep -q '^1f8b'"],
+        # join.sh template uses the same pattern (checked textually too)
+    ):
+        proc = subprocess.run(script, capture_output=True, text=True,
+                              timeout=30)
+        assert proc.returncode == 0, f"gzip check fails on real gzip: {script}"
+    tpl = (Path(__file__).resolve().parents[1] / "scheduler"
+           / "server.py").read_text()
+    assert 'grep -q "1f 8b"' not in tpl
 
 
 async def test_snapshot_and_render_empty(headless_server):

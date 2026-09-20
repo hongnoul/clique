@@ -1,7 +1,13 @@
 #!/bin/sh
 # clique bootstrap: venv install + `clique` on PATH, one line for joiners.
-# Public repo:  curl -fsSL https://raw.githubusercontent.com/hongnoul/tcj/main/scripts/bootstrap.sh | sh
-# Private repo (this one): export CLIQUE_GITHUB_TOKEN=github_pat_... first, then
+#
+# Server-first (no GitHub account, no PAT needed when the clique is up):
+#   export CLIQUE_SERVER=http://<server-ip>:7777
+#   curl -fsSL $CLIQUE_SERVER/join.sh | sh        # preferred: server's own bundle
+#   # or: CLIQUE_SERVER=http://<server-ip>:7777 sh scripts/bootstrap.sh
+#
+# GitHub fallback (server unreachable, or dev checkout with history):
+#   export CLIQUE_GITHUB_TOKEN=github_pat_...     # contents:read on hongnoul/tcj
 #   curl -fsSL -H "Authorization: Bearer $CLIQUE_GITHUB_TOKEN" \
 #     https://raw.githubusercontent.com/hongnoul/tcj/main/scripts/bootstrap.sh | sh
 # or from a clone:  sh scripts/bootstrap.sh
@@ -69,10 +75,17 @@ main() {
         log "using CLIQUE_GITHUB_TOKEN for auth"
     fi
 
-    # get source: use cwd if it is a clone, else clone/pull (tarball fallback)
+    # get source: use cwd if it is a clone, else server bundle (no GitHub),
+    # else clone/pull (tarball fallback)
     if [ -f "pyproject.toml" ] && grep -q '^name = "clique"' pyproject.toml 2>/dev/null; then
         SRC_DIR="$(pwd)"
         log "using local checkout: $SRC_DIR"
+    elif [ -n "${CLIQUE_SERVER:-}" ]; then
+        # Server-first: git history comes from the clique itself
+        # ($SERVER/repo.bundle), so teammates need no GitHub account or PAT.
+        log "fetching source from clique server ${CLIQUE_SERVER}..."
+        fetch_server_bundle "$INSTALL_DIR" "${CLIQUE_SERVER}" || exit 1
+        SRC_DIR="$INSTALL_DIR"
     else
         if [ -d "$INSTALL_DIR/.git" ]; then
             log "updating $INSTALL_DIR..."
@@ -172,8 +185,49 @@ diag_clone_failure() {
     echo "--- end diagnostics ---" >&2
 }
 
-fetch_tarball() {
-    # Fallback when git is broken/missing-ca/blocked: no git needed, just curl+tar.
+fetch_server_bundle() {
+    # Server-first source: clone full git history from the clique itself
+    # ($SERVER/repo.bundle). No GitHub account, no PAT, no ssh key.
+    # Falls back to $SERVER/app.tgz (snapshot, no history) when the
+    # server has no git (tarball installs report server_sha=unknown).
+    dest="$1"
+    srv="$2"
+    case "$dest" in
+        ""|"/"|"$HOME"|"$HOME/" ) echo "error: refusing to unpack bundle into '$dest'" >&2; return 1;;
+    esac
+    tmpfile="${TMPDIR:-/tmp}/clique-repo-$$.bundle"
+    rm -f "$tmpfile"
+    if ! curl -fsSL --max-time 120 "$srv/repo.bundle" -o "$tmpfile"; then
+        echo "error: bundle download failed ($srv/repo.bundle unreachable)" >&2
+        rm -f "$tmpfile"
+        return 1
+    fi
+    if od -An -N2 -tx1 "$tmpfile" | tr -d ' \n' | grep -q '^1f8b'; then
+        # gzip fallback: server has no git history, serve snapshot instead
+        log "server has no git history; installing snapshot..."
+        rm -rf "$dest"
+        mkdir -p "$dest"
+        if tar -xz -C "$dest" -f "$tmpfile"; then
+            rm -f "$tmpfile"
+            return 0
+        fi
+        echo "error: snapshot unpack failed" >&2
+        rm -f "$tmpfile"
+        return 1
+    fi
+    rm -rf "$dest"
+    if git clone -q "$tmpfile" "$dest" < /dev/null 2>/dev/null; then
+        rm -f "$tmpfile"
+        log "cloned history from clique server (no GitHub involved)"
+        return 0
+    fi
+    echo "error: bundle clone failed" >&2
+    head -c 200 "$tmpfile" | tr -d '\0' | head -n 3 || true
+    rm -f "$tmpfile"
+    return 1
+}
+
+fetch_tarball() {    # Fallback when git is broken/missing-ca/blocked: no git needed, just curl+tar.
     # Downloads to a temp file first, validates the gzip magic, then unpacks, so
     # an HTML error page can never be mistaken for a source tree.
     dest="$1"
@@ -196,8 +250,9 @@ fetch_tarball() {
         rm -f "$tmpfile"
         return 1
     fi
-    # gzip magic 1f 8b, checked portably (script runs under POSIX sh, not bash)
-    if ! head -c 2 "$tmpfile" | od -An -tx1 | grep -q "1f 8b"; then
+    # gzip magic 1f 8b, checked portably (script runs under POSIX sh, not bash;
+    # BSD od separates bytes with two spaces, so strip whitespace first)
+    if ! od -An -N2 -tx1 "$tmpfile" | tr -d ' \n' | grep -q '^1f8b'; then
         echo "error: tarball download is not gzip (bad token? private repo?)" >&2
         head -c 300 "$tmpfile" | tr -d '\0' | head -n 5 || true
         rm -f "$tmpfile"
