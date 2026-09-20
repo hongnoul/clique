@@ -15,12 +15,14 @@ PASS=0; FAIL=0
 ok()  { PASS=$((PASS+1)); printf '  \033[32mPASS\033[0m %s\n' "$1"; }
 bad() { FAIL=$((FAIL+1)); printf '  \033[31mFAIL\033[0m %s\n' "$1"; }
 die() { bad "$1"; printf '\nSWEEP ABORTED (%s passed, %s failed)\n' "$PASS" "$FAIL"; exit 1; }
-J() { # tiny jq replacement: J <expr>  (reads stdin)
+J() { # tiny jq replacement: J <expr>  (reads stdin), expr like .[0].sha or .server_sha
   if command -v jq >/dev/null 2>&1; then jq -r "$1"; else
-    python3 -c "import json,sys
+    python3 -c "
+import json,re,sys
 d=json.load(sys.stdin)
-for part in '$1'.strip('.').split('.'):
-    if part: d=d[int(part)] if part.lstrip('-').isdigit() and isinstance(d,list) else d.get(part) if isinstance(d,dict) else d
+for part in re.findall(r'\[(\d+)\]|\.([A-Za-z_][A-Za-z0-9_]*)', '$1'):
+    idx, key = part
+    d = d[int(idx)] if idx else d.get(key) if isinstance(d, dict) else None
 print(d)"
   fi
 }
@@ -60,8 +62,8 @@ echo "== 4. code-repo audit: history + nested-tree diff (regression de389a8) =="
 CHIST=$(curl -fsS "$S/v1/vcs/history?repo=code") || die "/v1/vcs/history?repo=code failed"
 echo "$CHIST" | grep -q "code task" && ok "code-repo history has accepted commit" \
   || bad "no code-task commit in code-repo history"
-CHEAD=$(echo "$CHIST" | J '.0.sha')
-CPARENT=$(echo "$CHIST" | J '.1.sha')
+CHEAD=$(echo "$CHIST" | J '.[0].sha')
+CPARENT=$(echo "$CHIST" | J '.[1].sha')
 if [ -n "$CPARENT" ] && [ "$CPARENT" != "None" ]; then
   DIFF=$(curl -fsS "$S/v1/vcs/diff?repo=code&a=$CPARENT&b=$CHEAD") \
     || die "code-repo diff 500: nested-tree regression (pre-de389a8 server?)"
@@ -71,7 +73,7 @@ if [ -n "$CPARENT" ] && [ "$CPARENT" != "None" ]; then
 fi
 
 echo "== 5. rejection path: failing tests leave no commit =="
-BEFORE=$(curl -fsS "$S/v1/vcs/history?repo=code" | J '.0.sha')
+BEFORE=$(curl -fsS "$S/v1/vcs/history?repo=code" | J '.[0].sha')
 OUT2=$(clique code-submit --server "$S" \
   -p "Change is_even to always return the string BROKEN regardless of input. Only modify mathutil.py." \
   --inline 'mathutil.py:def is_even(n):\n    return n % 2 == 0\n' \
@@ -83,7 +85,7 @@ if echo "$OUT2" | grep -q "accepted"; then
 else
   ok "rejected (tests failed or diff invalid)"
 fi
-AFTER=$(curl -fsS "$S/v1/vcs/history?repo=code" | J '.0.sha')
+AFTER=$(curl -fsS "$S/v1/vcs/history?repo=code" | J '.[0].sha')
 [ "$BEFORE" = "$AFTER" ] && ok "no new commit on rejection" || bad "rejection created a commit"
 
 echo "== 6. race: one winner, siblings cancelled =="
