@@ -10,12 +10,38 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import AsyncIterator
+from typing import AsyncIterator, Sequence
 
 import httpx
 
 from common.errors import ModelNotReadyError
-from common.types import ModelSpec, TaskType
+from common.types import ChatMessage, ModelSpec, TaskType
+
+
+def _as_openai_messages(
+        prompt: str, messages: Sequence[ChatMessage | dict] | None) -> list[dict]:
+    if messages:
+        out = []
+        for m in messages:
+            if isinstance(m, dict):
+                out.append({"role": m.get("role", "user"),
+                            "content": m.get("content", "")})
+            else:
+                out.append({"role": m.role, "content": m.content})
+        return out
+    return [{"role": "user", "content": prompt}]
+
+
+def _joined_prompt(prompt: str, messages: Sequence[ChatMessage | dict] | None) -> str:
+    if not messages:
+        return prompt
+    parts = []
+    for m in messages:
+        if isinstance(m, dict):
+            parts.append(f"{m.get('role', 'user')}: {m.get('content', '')}")
+        else:
+            parts.append(f"{m.role}: {m.content}")
+    return "\n".join(parts)
 
 
 class BaseRuntime:
@@ -25,7 +51,9 @@ class BaseRuntime:
     async def health(self) -> bool:
         raise NotImplementedError
 
-    async def infer_stream(self, prompt: str, max_tokens: int) -> AsyncIterator[str]:
+    async def infer_stream(self, prompt: str, max_tokens: int,
+                           messages: Sequence[ChatMessage | dict] | None = None
+                           ) -> AsyncIterator[str]:
         raise NotImplementedError
         yield  # pragma: no cover
 
@@ -43,9 +71,12 @@ class EchoRuntime(BaseRuntime):
     async def health(self) -> bool:
         return True
 
-    async def infer_stream(self, prompt: str, max_tokens: int) -> AsyncIterator[str]:
+    async def infer_stream(self, prompt: str, max_tokens: int,
+                           messages: Sequence[ChatMessage | dict] | None = None
+                           ) -> AsyncIterator[str]:
         self._cancel.clear()
-        words = prompt.split() or ["(empty)"]
+        text = _joined_prompt(prompt, messages)
+        words = text.split() or ["(empty)"]
         yield f"echo[{len(words)}w]: "
         for w in words[:max_tokens]:
             if self._cancel.is_set():
@@ -71,11 +102,13 @@ class OpenAICompatRuntime(BaseRuntime):
         except httpx.HTTPError:
             return False
 
-    async def infer_stream(self, prompt: str, max_tokens: int) -> AsyncIterator[str]:
+    async def infer_stream(self, prompt: str, max_tokens: int,
+                           messages: Sequence[ChatMessage | dict] | None = None
+                           ) -> AsyncIterator[str]:
         self._cancel.clear()
         body = {
             "model": self.model_name,
-            "messages": [{"role": "user", "content": prompt}],
+            "messages": _as_openai_messages(prompt, messages),
             "max_tokens": max_tokens,
             "stream": True,
         }
