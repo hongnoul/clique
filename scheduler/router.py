@@ -182,19 +182,25 @@ class Router:
     # -- scheduling --------------------------------------------------------------
 
     def schedule_pending(self) -> list[tuple[TaskAssignment, TaskRequest]]:
-        """Match queued tasks to ready nodes. One task per node.
+        """Match queued tasks to nodes with free slots. A node takes up to
+        model.parallel_slots concurrent tasks (1 for runtimes that cannot
+        batch; >1 for continuous-batching servers like vLLM).
 
         The TaskRequest on each assignment is a wire copy: session tasks
         have history replayed into ``prompt``. The queued row is unchanged.
         """
         ready = {n.node_id: n for n in self.registry.ready_nodes()}
-        # exclude nodes already holding an active assignment in our table
+        # count active assignments per node; drop nodes at slot capacity
         rows = self._db.execute(
-            "SELECT assigned_node FROM tasks WHERE state IN ('assigned','running')"
-            " AND assigned_node IS NOT NULL"
+            "SELECT assigned_node, COUNT(*) FROM tasks"
+            " WHERE state IN ('assigned','running') AND assigned_node IS NOT NULL"
+            " GROUP BY assigned_node"
         ).fetchall()
-        for (nid,) in rows:
-            ready.pop(nid, None)
+        active = dict(rows)
+        for nid in list(ready):
+            slots = getattr(ready[nid].model, "parallel_slots", 1) or 1
+            if active.get(nid, 0) >= slots:
+                del ready[nid]
 
         out: list[tuple[TaskAssignment, TaskRequest]] = []
         queued = self._db.execute(
@@ -237,7 +243,10 @@ class Router:
                 (best.node_id, attempt_id, lease.isoformat(), request.task_id),
             )
             self._db.commit()
-            del ready[best.node_id]
+            active[best.node_id] = active.get(best.node_id, 0) + 1
+            slots = getattr(best.model, "parallel_slots", 1) or 1
+            if active[best.node_id] >= slots:
+                del ready[best.node_id]
             wire = request.model_copy()
             wire.prompt = worker_prompt
             out.append((TaskAssignment(

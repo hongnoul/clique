@@ -131,5 +131,6 @@ def spec_from_config(cfg: "NodeConfig") -> ModelSpec:  # noqa: F821
         parameter_count_b=cfg.model_parameter_b,
         runtime=cfg.model_runtime,
         context_window=cfg.context_window,
+        parallel_slots=cfg.parallel_slots,
         capabilities=capabilities_for_family(cfg.model_family),
     )

@@ -99,6 +99,7 @@ def join(server: str = typer.Option(None, help="server URL, skips mDNS"),
          runtime: str = typer.Option(None, help="echo | openai-compat"),
          model_name: str = typer.Option(None, help="e.g. qwen2.5-coder:7b"),
          param_b: float = typer.Option(None, help="model size in B params"),
+         parallel_slots: int = typer.Option(None, help="concurrent tasks the runtime can batch (vLLM: 8+)"),
          foreground: bool = typer.Option(
              False, "--foreground", "-f",
              help="block in this terminal instead of backgrounding")) -> None:
@@ -117,6 +118,8 @@ def join(server: str = typer.Option(None, help="server URL, skips mDNS"),
         extra += ["--model-name", model_name]
     if param_b:
         extra += ["--param-b", str(param_b)]
+    if parallel_slots:
+        extra += ["--parallel-slots", str(parallel_slots)]
 
     if foreground:
         from node.agent import main as agent_main

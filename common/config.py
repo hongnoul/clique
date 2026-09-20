@@ -25,6 +25,7 @@ class NodeConfig:
     model_family: str = "echo"
     model_parameter_b: float = 7.0
     model_runtime: str = "echo"  # "echo" | "openai-compat"
+    parallel_slots: int = 1  # concurrent tasks the runtime can batch (vLLM > 1)
     openai_base_url: str = "http://127.0.0.1:11434/v1"  # ollama default
     openai_model_name: str = ""  # e.g. "qwen2.5-coder:7b"
     context_window: int = 8192

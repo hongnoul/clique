@@ -189,9 +189,24 @@ class Registry:
         return list(by_key.values())
 
     def ready_nodes(self) -> list[NodeInfo]:
-        return [n for n in self.list_nodes()
-                if n.status == NodeStatus.READY and n.model is not None
-                and n.current_task_id is None]
+        # Nodes eligible for (more) work. Busy nodes stay eligible when their
+        # model runtime advertises parallel slots; the router counts active
+        # assignments per node and enforces the slot cap.
+        out = []
+        for n in self.list_nodes():
+            if n.model is None:
+                continue
+            slots = getattr(n.model, "parallel_slots", 1) or 1
+            if slots <= 1:
+                # legacy single-task nodes: strict READY + idle
+                if n.status == NodeStatus.READY and n.current_task_id is None:
+                    out.append(n)
+            else:
+                # batching nodes stay eligible while busy; the router
+                # enforces the slot cap from its assignment table
+                if n.status in (NodeStatus.READY, NodeStatus.BUSY):
+                    out.append(n)
+        return out
 
     def remove(self, node_id: str, task_duration_s: float = 0.0) -> None:
         """Mark a node offline (LEAVE or kick). task_duration_s is how long
