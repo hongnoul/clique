@@ -88,3 +88,120 @@ def test_chat_completions_forwards_tools():
     assert wire["tool_choice"] == "auto"
     back = TaskRequest.model_validate(wire)
     assert back.tools and back.tools[0].name == "clique_self_assess"
+
+
+# -- WS relay integration -------------------------------------------------
+# A scripted tool-capable runtime on a REAL NodeAgent over a REAL agent WS:
+# model emits a call -> agent relays TOOL_CALL -> server executes ->
+# TOOL_RESULT returns -> model answers. No mocks of the relay path.
+
+class RelayRuntime:
+    """First infer_tools round requests workspace_create; second answers."""
+
+    def __init__(self) -> None:
+        self.rounds = 0
+
+    async def health(self) -> bool:
+        return True
+
+    async def infer_stream(self, prompt, max_tokens, messages=None):
+        yield ""
+
+    async def infer_tools(self, messages, tools, tool_choice, max_tokens):
+        from common.types import ToolCall
+        self.rounds += 1
+        if self.rounds == 1:
+            return "", [ToolCall(call_id="c1",
+                                 name="clique_workspace_create",
+                                 arguments={"files": {"relay.md": "via ws\n"}})]
+        return "created", []
+
+
+@pytest.mark.asyncio
+async def test_ws_relay_end_to_end(tmp_path):
+    """Full relay over real agent WS with a tool-capable runtime."""
+    import asyncio
+    import socket
+    import uuid
+
+    import httpx
+    import uvicorn
+
+    from common.config import Config
+    from common.types import TaskRequest, ToolDef
+    from node.agent import NodeAgent
+
+    def make_config(name: str, port: int) -> Config:
+        cfg = Config()
+        cfg.node.display_name = name
+        cfg.node.data_dir = tmp_path / name
+        cfg.node.model_runtime = "echo"
+        cfg.node.model_family = "echo"
+        cfg.node.heartbeat_interval_s = 0.2
+        cfg.server.api_host = "127.0.0.1"
+        cfg.server.api_port = port
+        cfg.server.db_path = tmp_path / "server.db"
+        cfg.server.lease_seconds = 30.0
+        return cfg
+
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    port = s.getsockname()[1]
+    s.close()
+    server = make_server(tmp_path)
+    uv = uvicorn.Server(uvicorn.Config(
+        server.app, host="127.0.0.1", port=port, log_level="warning"))
+    server_task = asyncio.create_task(uv.serve())
+    base = f"http://127.0.0.1:{port}"
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as c:
+            for _ in range(100):
+                try:
+                    await c.get(base + "/v1/clique")
+                    break
+                except httpx.HTTPError:
+                    await asyncio.sleep(0.05)
+        agent = NodeAgent(make_config("relay-node", port), base)
+        agent.runtime = RelayRuntime()  # tool-capable stand-in
+        agent_task = asyncio.create_task(agent.run())
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as c:
+                for _ in range(100):
+                    nodes = (await c.get(base + "/v1/nodes")).json()
+                    if any(n["status"] == "ready" for n in nodes):
+                        break
+                    await asyncio.sleep(0.1)
+                else:
+                    raise RuntimeError("agent never ready")
+                req = TaskRequest(
+                    prompt="create a workspace", idempotency_key=uuid.uuid4().hex,
+                    tools=[ToolDef(name="clique_workspace_create",
+                                   description="create",
+                                   parameters={"type": "object",
+                                               "properties": {}})])
+                r = await c.post(base + "/v1/tasks",
+                                 json=req.model_dump(mode="json"))
+                task_id = r.json()["task_id"]
+                for _ in range(200):
+                    data = (await c.get(
+                        f"{base}/v1/tasks/{task_id}")).json()
+                    if data["state"] in ("succeeded", "failed",
+                                         "cancelled", "expired"):
+                        break
+                    await asyncio.sleep(0.1)
+                assert data["state"] == "succeeded", data
+                assert data["result"]["output"] == "created"
+                # the relay actually ran server-side: workspace exists
+                listed = (await c.get(base + "/v1/workspaces")).json()
+                assert len(listed) == 1
+                wid = listed[0]["workspace_id"]
+                st = (await c.get(f"{base}/v1/workspaces/{wid}/file",
+                                  params={"path": "relay.md"})).json()
+                assert st["text"] == "via ws\n"
+        finally:
+            agent._stop.set()
+            agent_task.cancel()
+            await asyncio.gather(agent_task, return_exceptions=True)
+    finally:
+        uv.should_exit = True
+        await asyncio.gather(server_task, return_exceptions=True)
