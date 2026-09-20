@@ -479,6 +479,15 @@ async def test_web_dashboard_served(clique):
     assert chrome.status_code == 200 and "applyTheme" in chrome.text
     assert "/chat" in r.text  # menu links to the chat page (notes stub gone)
     assert "Notes" not in r.text
+    # A merge that pastes chrome.js's theme block back into the page
+    # redeclares its consts, and that SyntaxError kills the whole inline
+    # script (tables silently stop rendering). Same for double-pasted
+    # watch helpers, so keep every declaration single.
+    assert "const themeBtn" not in r.text, "dashboard re-declares chrome.js state"
+    for once in ("function watchTask", "function stopWatch", "function showLive"):
+        assert r.text.count(once) == 1, f"dashboard declares {once} twice"
+    # phone layout: cards stack and the mascot steps out of the way
+    assert "max-width: 700px" in r.text and "max-width: 700px" in assets.text
 
 
 @pytest.mark.asyncio
@@ -492,6 +501,11 @@ async def test_web_chat_page_served(clique):
     for needle in ("/v1/chat/sessions", "/v1/tasks", "/ws/tasks/",
                    "/ws/sessions/", "idempotency_key"):
         assert needle in r.text, f"chat page missing {needle}"
+    # phone layout: the chat list becomes a drawer, so its toggle and
+    # backdrop must exist in markup and be wired in script
+    assert "max-width: 700px" in r.text
+    for needle in ("chatsBtn", "drawerBackdrop", "setDrawer"):
+        assert r.text.count(needle) >= 2, f"chat page drawer missing {needle}"
 
 
 @pytest.mark.asyncio

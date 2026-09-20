@@ -6,26 +6,34 @@
   --accent: #6855ff;
   --bg: #0d1117; --fg: #c9d1d9; --card-bg: #161b22; --border: #30363d;
   --link: #58a6ff; --muted: #8b949e; --hover-bg: #21262d;
+  --logo-fg: #c199ff;
   color-scheme: dark;
 }
 @media (prefers-color-scheme: light) {
   :root:not([data-theme="dark"]) {
     --bg: #f6f8fa; --fg: #24292f; --card-bg: #ffffff; --border: #d0d7de;
     --link: #0969da; --muted: #57606a; --hover-bg: #eef1f4;
+    --logo-fg: #6b2eb8;
     color-scheme: light;
   }
 }
 :root[data-theme="light"] {
   --bg: #f6f8fa; --fg: #24292f; --card-bg: #ffffff; --border: #d0d7de;
   --link: #0969da; --muted: #57606a; --hover-bg: #eef1f4;
+  --logo-fg: #6b2eb8;
   color-scheme: light;
 }
 
+*, *::before, *::after { box-sizing: border-box; }
 html, body { height: 100%; }
 body { font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
        background: var(--bg); color: var(--fg); margin: 0; padding: 1rem;
-       box-sizing: border-box; transition: background .15s, color .15s;
-       display: flex; flex-direction: column; }
+       transition: background .15s, color .15s;
+       display: flex; flex-direction: column;
+       -webkit-text-size-adjust: 100%; }
+/* dvh, not vh: a phone's URL bar and keyboard resize the viewport, and
+   vh would leave the page taller than what is actually on screen. */
+@supports (height: 100dvh) { html, body { height: 100dvh; } }
 h2 { font-size: .95rem; color: var(--accent); margin: 0 0 .5rem; }
 .card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 0;
         padding: .8rem 1rem; }
@@ -42,7 +50,10 @@ header { display: flex; align-items: center; justify-content: space-between;
          gap: .8rem; margin-bottom: 1.4rem; padding: .3rem 0; position: relative;
          flex: none; }
 .brand { display: flex; align-items: center; color: var(--fg); }
-#logo { height: 96px; display: block; }
+/* the wordmark paints with currentColor; set it here so both pages match
+   and an <a>-wrapped logo never falls back to the browser's link colour */
+#logo { height: 96px; display: block; color: var(--logo-fg);
+        text-decoration: none; }
 #logo svg { height: 100%; width: auto; display: block; }
 .header-actions { display: flex; align-items: center; gap: .5rem; position: relative; }
 
@@ -63,3 +74,17 @@ header { display: flex; align-items: center; justify-content: space-between;
 .menu-item:not([aria-disabled="true"]):hover { background: var(--hover-bg); }
 .soon { font-size: .65rem; border: 1px solid var(--border); border-radius: 0;
         padding: 0 .35rem; color: var(--muted); }
+
+/* phones: the header gives back its height, tables tighten up, and any
+   table too wide to fit scrolls sideways inside its own card instead of
+   stretching the page. */
+@media (max-width: 700px) {
+  body { padding: .6rem; }
+  header { margin-bottom: .7rem; gap: .5rem; padding: 0; }
+  #logo { height: 52px; }
+  .icon-btn { padding: .45rem .7rem; font-size: 1.1rem; }
+  .card { padding: .6rem .7rem; }
+  table { font-size: .74rem; }
+  th, td { padding: .25rem .35rem; }
+  .menu-panel { min-width: 140px; }
+}
