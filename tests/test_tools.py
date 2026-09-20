@@ -264,3 +264,15 @@ async def test_fallback_accepts_tool_key_and_string_args():
         "choices": [{"message": {
             "content": '{\n  "tool": "clique_self_assess",\n  "arguments": {}\n}'}}]})
     assert content == "" and calls[0].name == "clique_self_assess"
+
+
+@pytest.mark.asyncio
+async def test_fallback_xml_tool_call_shape():
+    # nemotron's native text shape: <tool_call><function=name>..</function></tool_call>
+    from node.model_runtime import parse_tool_calls_response
+    content, calls = parse_tool_calls_response({
+        "choices": [{"message": {
+            "content": "thinking...\n</think>\n<tool_call>\n"
+                       "<function=clique_self_assess>\n</function>\n</tool_call>\n"}}]})
+    assert content == "" and calls[0].name == "clique_self_assess"
+    assert calls[0].arguments == {}

@@ -105,6 +105,30 @@ def _fallback_call(obj: dict) -> ToolCall | None:
     return None
 
 
+def _fallback_call_xml(text: str) -> ToolCall | None:
+    """Nemotron/Qwen tool shape: <tool_call><function=NAME>args</function>
+    </tool_call>. Args may be JSON, empty, or absent."""
+    import re
+    m = re.search(r"<tool_call>\s*<function=([^>\s]+)>\s*(.*?)\s*"
+                  r"</function>\s*</tool_call>", text, re.DOTALL)
+    if not m:
+        m = re.search(r"<function=([^>\s]+)>\s*(.*?)\s*</function>",
+                      text, re.DOTALL)
+    if not m:
+        return None
+    name, raw_args = m.group(1).strip(), (m.group(2) or "").strip()
+    args: dict = {}
+    if raw_args:
+        try:
+            parsed = json.loads(raw_args)
+            args = parsed if isinstance(parsed, dict) else {}
+        except json.JSONDecodeError:
+            args = {}
+    if name:
+        return ToolCall(call_id="", name=name, arguments=args)
+    return None
+
+
 def parse_tool_calls_response(data: dict) -> tuple[str, list[ToolCall]]:
     """Split one non-streaming choice into (content, tool_calls).
 
@@ -153,6 +177,13 @@ def parse_tool_calls_response(data: dict) -> tuple[str, list[ToolCall]]:
             if fb is not None:
                 calls = [fb]
                 content = ""
+    if not calls:
+        # Nemotron/Qwen XML shape anywhere in the text (often after
+        # </think>): <tool_call><function=name>args</function></tool_call>
+        fb = _fallback_call_xml(content)
+        if fb is not None:
+            calls = [fb]
+            content = ""
     return content, calls
 
 
