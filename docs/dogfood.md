@@ -4,27 +4,28 @@ Server: `http://100.83.233.124:7777` over Tailscale.
 GPU engine: vLLM FP8 `nemotron-3-nano-fp8` on :8000, 340+ TPS aggregate at 32-way batching,
 16 `parallel_slots` on the clique node.
 
-## Live status (2026-09-20, verified end-to-end from this Mac)
+## Live status (2026-09-20 03:40 ET, verified end-to-end from this Mac)
 
-- Server tree deployed to gx10 `~/tcj` from this branch (tarball, backup kept
-  as `~/tcj.bak-*`). Live at `http://100.83.233.124:7777` with the new routes:
-  `/` menu, `/join.sh`, `/app.tgz`, `/repo.bundle`, `/v1/clique` now reports
-  `protocol_version` + `server_sha` (`unknown` on gx10: tarball install, no git).
-- Supervision: the system units need sudo. User-level units installed at
-  `~/.config/systemd/user/clique-server.service` + `clique-node.service`
-  (`Restart=always`, enabled). Server is `active` under the user manager.
-- Verified: `clique onboard --dry` prints `server ok (protocol=1)`;
-  echo-node join + submit + ledger increment (succeeded 47 -> 48).
-- **Blocked money loop:** vLLM is down. `asus` is not in the `docker` group
-  (`docker.sock` is `root:docker`), so the node unit waits in `start-pre` on
-  `:8000/v1/models` forever. Fix on gx10 (needs one sudo):
-  `sudo usermod -aG docker asus` then re-login, or `sudo systemctl start vllm`
-  if a system unit exists. Until then gx10 serves onboarding + echo tasks only,
-  no GPU throughput.
-- **Update: money loop RECOVERED (02:00 ET).** `gx10-vllm` is `ready`
-  (nemotron-3-nano-fp8, 16 slots), `:8000/v1/models` answers, and a live
-  `--model nemotron` submit completed in 7.6s on node `7c1e3619`
-  (succeeded 60+). Someone restarted vLLM. Dogfood waves 1+ are unblocked.
+- gx10 `~/tcj` is now a **real git checkout** of this branch (bundle clone,
+  prior tree kept as `~/tcj.bak-*`), so `/v1/clique` reports a true
+  `server_sha` (bb67fca). Venv rebuilt in place; note venv shebangs break
+  if the tree directory is moved, rebuild `.venv` after any rename.
+- Supervision: user units `clique-server` + `clique-node` + **new
+  `clique-tunnel`** (`Restart=always`, enabled). All three `active`.
+- **Zero-context onboarding is live.** `clique-tunnel.service` runs a
+  cloudflared quick tunnel (no account, no sudo) and writes the https URL
+  to `~/.clique/public_url`; the server advertises it as `public_url` in
+  `/v1/clique` and on `/`. A joiner needs no tailscale, no VPN, no LAN.
+  The URL **rotates on tunnel restart**: always fetch the current one from
+  `curl http://100.83.233.124:7777/` (or `/v1/clique`).
+- Verified twice from pristine `$HOME`s over the public URL (including
+  once after a deliberate tunnel restart with a rotated URL): install
+  ~10s, Join -> node `ready`, `--model nemotron` submit answered in
+  1.4-1.5s on `7c1e3619` through the tunnel, `clique leave` deregisters.
+- Fail-fast: documented one-liners use `--connect-timeout 5`, so hitting
+  a tailnet IP from off-tailnet errors in 5s instead of hanging.
+- Money loop healthy: `gx10-vllm` ready (nemotron-3-nano-fp8, 16 slots),
+  ledger 75+ succeeded.
 
 ## Graceful principles
 
