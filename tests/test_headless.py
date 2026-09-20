@@ -353,7 +353,7 @@ async def test_cli_dash_once(headless_server, capsys):
 
 
 def test_join_forwards_base_url_to_agent(monkeypatch):
-    """`clique join --base-url X --model-name Y` reaches clique-agent argv."""
+    """`clique join --foreground --base-url X ...` reaches agent argv."""
     from typer.testing import CliRunner
 
     import client.cli as _cli
@@ -370,7 +370,7 @@ def test_join_forwards_base_url_to_agent(monkeypatch):
         ["join", "--server", "http://x:7777", "--runtime", "openai-compat",
          "--model-name", "qwen2.5-coder:7b",
          "--base-url", "http://127.0.0.1:11434/v1",
-         "--param-b", "7", "--parallel-slots", "4"],
+         "--param-b", "7", "--parallel-slots", "4", "--foreground"],
     )
     assert result.exit_code == 0, result.output
     argv = seen["argv"]
@@ -395,7 +395,8 @@ def test_join_direct_call_drops_optioninfo_defaults(monkeypatch):
         seen["argv"] = list(_sys.argv)
 
     monkeypatch.setattr(_agent, "main", fake_agent_main)
-    _cli.join(server="http://x:7777", runtime="echo", param_b=7.0)
+    _cli.join(server="http://x:7777", runtime="echo", param_b=7.0,
+              foreground=True)
     argv = seen["argv"]
     assert all(isinstance(x, str) for x in argv), argv
     assert argv == ["clique-agent", "--server", "http://x:7777",

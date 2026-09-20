@@ -867,7 +867,7 @@ def onboard(server: str = typer.Option(None, help="clique server URL (or $CLIQUE
         console.print("[dim]--dry: not joining[/]")
         return
     join(server=srv, runtime=rt, model_name=mn, base_url=bu,
-         param_b=param_b, parallel_slots=parallel_slots)
+         param_b=param_b, parallel_slots=parallel_slots, foreground=True)
 
 
 def _local_sha() -> str | None:
