@@ -526,3 +526,31 @@ def test_ui_command_registered():
     result = CliRunner().invoke(app, ["ui", "--help"])
     assert result.exit_code == 0, result.output
     assert "Host / Join" in result.output
+
+
+async def test_home_spawn_error_shows_tail_not_busy():
+    """SpawnError is a RuntimeError subclass: Host/Join must show the log
+    tail (host failed/join failed), not 'already running'."""
+    from unittest.mock import patch
+
+    from textual.widgets import Static
+
+    import client.home as H
+    from client.daemon import SpawnError
+
+    boom = SpawnError("agent exited immediately (code 1)",
+                      "Traceback: port in use")
+    app = H.HomeApp.build()("http://127.0.0.1:1")
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        with patch.object(H, "do_host", side_effect=boom):
+            await app._run_host()
+            msg = str(app.query_one("#msg", Static).content)
+            assert "host failed" in msg and "port in use" in msg, msg
+    app2 = H.HomeApp.build()("http://127.0.0.1:1")
+    async with app2.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        with patch.object(H, "do_join", side_effect=boom):
+            await app2._run_join()
+            msg = str(app2.query_one("#msg", Static).content)
+            assert "join failed" in msg and "port in use" in msg, msg

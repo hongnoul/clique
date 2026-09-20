@@ -184,6 +184,8 @@ def do_join(server: str, runtime: str | None = None,
     try:
         proc = daemon.spawn(config.node.data_dir, "agent", argv,
                             meta={"server": srv, "name": display_name})
+    except daemon.SpawnError:
+        raise  # preserve log_tail for the caller to surface
     except RuntimeError as e:
         raise RuntimeError(str(e)) from None
     detail = f"joined {srv} (pid {proc.pid}) as {display_name} [{rt}]"
@@ -224,10 +226,12 @@ class HomeApp:
             "normalize_server": normalize_server,
             "probe_server_sync": probe_server_sync,
             "local_state": local_state,
-            "do_host": do_host,
-            "do_stop_server_local": do_stop_server_local,
-            "do_leave": do_leave,
-            "do_join": do_join,
+            # do_host/do_join/do_stop/do_leave resolve late (module
+            # globals) so tests can patch client.home.do_host etc.
+            "do_host": lambda *a, **k: do_host(*a, **k),
+            "do_stop_server_local": lambda *a, **k: do_stop_server_local(*a, **k),
+            "do_leave": lambda *a, **k: do_leave(*a, **k),
+            "do_join": lambda *a, **k: do_join(*a, **k),
         }
 
         class _Home(App):
@@ -349,12 +353,13 @@ class HomeApp:
                 self.say("starting server...")
                 try:
                     msg = await asyncio.to_thread(_helpers["do_host"])
-                except RuntimeError as e:
-                    self.say(f"already running? {e}")
-                    return
-                except Exception as e:  # SpawnError carries log tail
+                except Exception as e:  # SpawnError first: subclass of RuntimeError
+                    from client.daemon import SpawnError as _SpawnError
                     tail = getattr(e, "log_tail", "")
-                    self.say(f"host failed: {e} {tail[-300:]}")
+                    if isinstance(e, _SpawnError):
+                        self.say(f"host failed: {e} {tail[-500:]}")
+                    else:
+                        self.say(f"already running? {e}")
                     return
                 self.say(msg)
                 await self.refresh_all()
@@ -378,12 +383,13 @@ class HomeApp:
                 try:
                     msg = await asyncio.to_thread(
                         _helpers["do_join"], self.server_url)
-                except RuntimeError as e:
-                    self.say(str(e))
-                    return
                 except Exception as e:
+                    from client.daemon import SpawnError as _SpawnError
                     tail = getattr(e, "log_tail", "")
-                    self.say(f"join failed: {e} {tail[-300:]}")
+                    if isinstance(e, _SpawnError) and tail:
+                        self.say(f"join failed: {e} {tail[-500:]}")
+                    else:
+                        self.say(str(e) or f"join failed: {e!r}")
                     return
                 self.say(msg)
                 await self.refresh_all()
