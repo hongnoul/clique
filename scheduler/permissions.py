@@ -32,6 +32,10 @@ _ACTIONS: dict[str, OpLevel] = {
     "grant_op": OpLevel.OP,
     "manage_vcs": OpLevel.OP,
     "server_access": OpLevel.MEMBER,
+    # any node in the clique may stop the server -- not just an op; it's
+    # a shared resource and shutdown already confirms before killing
+    # anyone's active task
+    "shutdown_server": OpLevel.MEMBER,
     "migrate_session": OpLevel.OP,
     "dismiss_suggestion": OpLevel.MEMBER,
 }

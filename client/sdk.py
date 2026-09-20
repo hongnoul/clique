@@ -155,6 +155,11 @@ class CliqueClient:
     async def kick(self, node_id: str) -> dict:
         return await self._post(f"/v1/nodes/{node_id}/kick")
 
+    async def server_shutdown(self, confirm: bool = False) -> dict:
+        """Raises httpx.HTTPStatusError(409) with response.json()["detail"]
+        = {"active": [...]} if nodes have active tasks and confirm=False."""
+        return await self._post("/v1/server/shutdown", {"confirm": confirm})
+
     # -- cron ------------------------------------------------------------------
 
     async def cron_request(self, cron_expr: str, prompt: str, **kw) -> dict:

@@ -2,6 +2,7 @@ README.md
 pyproject.toml
 client/__init__.py
 client/cli.py
+client/curl_tui.py
 client/sdk.py
 client/tui.py
 clique.egg-info/PKG-INFO
@@ -35,4 +36,5 @@ scheduler/vcs.py
 scheduler/api/__init__.py
 scheduler/api/rest.py
 scheduler/api/ws.py
+tests/test_headless.py
 tests/test_integration.py

@@ -74,6 +74,9 @@ class AgentConnections:
     def connected_ids(self) -> set[str]:
         return set(self._ws)
 
+    def items(self) -> list[tuple[str, WebSocket]]:
+        return list(self._ws.items())
+
 
 class SchedulerServer:
     def __init__(self, config: Config) -> None:
@@ -406,11 +409,35 @@ class SchedulerServer:
             self.registry.set_status(node_id, NodeStatus.READY, current_task_id=None)
             await self._schedule_now()
         elif mtype == protocol.LEAVE:
-            self.registry.remove(node_id)
+            info = self.registry.get(node_id)
+            task_age = (self.router.task_age_s(info.current_task_id)
+                       if info and info.current_task_id else 0.0)
+            self.registry.remove(node_id, task_age)
             for tid in self.router.on_node_lost(node_id):
                 log.info("requeued %s after %s left", tid, node_id)
             await self.events.publish("node.left", {"node_id": node_id})
             await self._schedule_now()
+
+    # -------------------------------------------------------------- shutdown
+
+    async def shutdown_active_tasks(self) -> list[dict]:
+        """Nodes currently holding a task, for the confirm-before-kill
+        check on POST /v1/server/shutdown."""
+        return [{"node_id": n.node_id, "display_name": n.display_name,
+                "task_id": n.current_task_id}
+               for n in self.registry.list_nodes() if n.current_task_id]
+
+    async def shutdown_now(self, reason: str = "server shutdown") -> None:
+        """Tell every connected agent to disconnect, then trigger this
+        process's own graceful exit (uvicorn already shuts down cleanly on
+        SIGTERM; reusing that path instead of a second exit mechanism)."""
+        import os
+        import signal
+        for node_id, ws in self.conns.items():
+            with contextlib.suppress(Exception):
+                await ws.send_text(protocol.dumps(protocol.msg_shutdown(reason)))
+        await asyncio.sleep(0.5)  # let SHUTDOWN frames flush before we go down
+        os.kill(os.getpid(), signal.SIGTERM)
 
     # ---------------------------------------------------------------- loops
 
@@ -435,6 +462,23 @@ class SchedulerServer:
                 self.registry.set_status(
                     assignment.node_id, NodeStatus.OFFLINE, current_task_id=None)
 
+    async def _reap_offline(self) -> None:
+        """Permanently drop roster entries that have been offline past
+        their grace period: the age of the task they were last running
+        (capped), so a brief network blip mid a long task gets time to
+        reconnect while an idle node is dropped right away."""
+        cfg = self.config.server
+        now = utcnow()
+        for info in self.registry.list_nodes(status=NodeStatus.OFFLINE):
+            if info.role == NodeRole.SERVER or info.offline_since is None:
+                continue
+            grace = min(info.last_task_duration_s, cfg.reap_grace_max_s)
+            if (now - info.offline_since).total_seconds() > grace:
+                log.info("reaping node %s (offline %.0fs, grace %.0fs)",
+                         info.node_id, (now - info.offline_since).total_seconds(), grace)
+                self.registry.delete(info.node_id)
+                await self.events.publish("node.reaped", {"node_id": info.node_id})
+
     async def _tick_loop(self) -> None:
         hb = self.config.node.heartbeat_interval_s
         offline_after = timedelta(seconds=hb * self.config.server.heartbeat_offline_after)
@@ -444,12 +488,14 @@ class SchedulerServer:
         while True:
             await asyncio.sleep(hb)
             try:
-                for info in self.registry.mark_offline_stale(offline_after):
+                for info in self.registry.mark_offline_stale(
+                        offline_after, task_age_fn=self.router.task_age_s):
                     log.info("node %s offline (stale heartbeat)", info.node_id)
                     for tid in self.router.on_node_lost(info.node_id):
                         log.info("requeued %s", tid)
                     await self.events.publish(
                         "node.offline", {"node_id": info.node_id})
+                await self._reap_offline()
                 self.router.expire_leases()
                 for task_id in self.cron.due():
                     log.info("cron fired task %s", task_id)

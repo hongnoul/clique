@@ -28,6 +28,7 @@ REVOKE = "revoke"
 RESULT = "result"
 PROGRESS = "progress"
 LEAVE = "leave"
+SHUTDOWN = "shutdown"
 
 
 def sign_payload(body: bytes, signing_key_hex: str) -> str:
@@ -81,6 +82,10 @@ def msg_progress(task_id: str, attempt_id: str, token_offset: int, text_delta: s
 
 def msg_leave(reason: str) -> dict[str, Any]:
     return {"type": LEAVE, "reason": reason}
+
+
+def msg_shutdown(reason: str) -> dict[str, Any]:
+    return {"type": SHUTDOWN, "reason": reason}
 
 
 def dumps(msg: dict[str, Any]) -> str:

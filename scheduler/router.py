@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import sqlite3
 import uuid
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from common.errors import LeaseExpiredError
@@ -217,6 +217,20 @@ class Router:
         )
         self._db.commit()
         return True
+
+    def task_age_s(self, task_id: str) -> float:
+        """Seconds since an in-flight task was assigned, or 0.0 if it isn't
+        currently assigned/running (already finished, requeued, or
+        unknown). Leases aren't renewed once set, so lease_expires_at minus
+        lease_seconds recovers the assignment time without an extra column."""
+        row = self._db.execute(
+            "SELECT lease_expires_at FROM tasks WHERE task_id=?"
+            " AND state IN ('assigned','running')", (task_id,)
+        ).fetchone()
+        if row is None or row[0] is None:
+            return 0.0
+        assigned_at = datetime.fromisoformat(row[0]) - timedelta(seconds=self.lease_seconds)
+        return max(0.0, (utcnow() - assigned_at).total_seconds())
 
     def on_node_lost(self, node_id: str) -> list[str]:
         """Requeue (or fail) in-flight tasks of a lost node. Returns requeued ids."""

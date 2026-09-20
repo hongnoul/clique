@@ -11,6 +11,7 @@ import json
 import sqlite3
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Callable
 
 from common.types import (
     Cluster,
@@ -71,11 +72,23 @@ class Registry:
             # rejoin: keep identity, op level, join order
             existing.display_name = display_name
             existing.address = address
-            existing.model = model or existing.model
-            existing.resources = resources or existing.resources
-            existing.status = NodeStatus.READY if existing.model else NodeStatus.JOINING
             existing.last_heartbeat_at = utcnow()
-            existing.current_task_id = None
+            if model is not None:
+                # a worker re-announcing itself with capacity info -- reset
+                # scheduling state, since anything it was doing before
+                # going away has already been reassigned by on_node_lost.
+                # A model-less call (e.g. the CLI's authenticate(), used
+                # just to get a bearer token for op-gated routes) must NOT
+                # touch status/current_task_id: it may share this identity
+                # with an actually-busy worker (same machine, same
+                # keypair), and clobbering that here would both hide a
+                # real in-flight task from callers like shutdown's
+                # active-task check and wrongly make the scheduler think
+                # a busy node is free.
+                existing.model = model
+                existing.resources = resources or existing.resources
+                existing.status = NodeStatus.READY
+                existing.current_task_id = None
             self._save(existing)
             return existing
 
@@ -126,7 +139,13 @@ class Registry:
             info.current_task_id = current_task_id
         self._save(info)
 
-    def mark_offline_stale(self, older_than: timedelta) -> list[NodeInfo]:
+    def mark_offline_stale(self, older_than: timedelta,
+                           task_age_fn: Callable[[str], float] | None = None) -> list[NodeInfo]:
+        """task_age_fn, if given, is called with a node's current_task_id
+        (only when it has one) to snapshot how long that task had been
+        running -- must be called before the caller reassigns/clears it
+        (e.g. via router.on_node_lost), since that snapshot drives this
+        node's reap grace period."""
         cutoff = utcnow() - older_than
         newly_offline = []
         for info in self.list_nodes():
@@ -135,6 +154,10 @@ class Registry:
             hb = info.last_heartbeat_at
             if hb is not None and hb < cutoff:
                 info.status = NodeStatus.OFFLINE
+                info.offline_since = utcnow()
+                info.last_task_duration_s = (
+                    task_age_fn(info.current_task_id)
+                    if task_age_fn and info.current_task_id else 0.0)
                 self._save(info)
                 newly_offline.append(info)
         return newly_offline
@@ -170,8 +193,25 @@ class Registry:
                 if n.status == NodeStatus.READY and n.model is not None
                 and n.current_task_id is None]
 
-    def remove(self, node_id: str) -> None:
-        self.set_status(node_id, NodeStatus.OFFLINE, current_task_id=None)
+    def remove(self, node_id: str, task_duration_s: float = 0.0) -> None:
+        """Mark a node offline (LEAVE or kick). task_duration_s is how long
+        its current task had been running, if any -- feeds the reap grace
+        period the same way a stale-heartbeat departure does."""
+        info = self.get(node_id)
+        if info is None:
+            return
+        info.status = NodeStatus.OFFLINE
+        info.current_task_id = None
+        info.offline_since = utcnow()
+        info.last_task_duration_s = task_duration_s
+        self._save(info)
+
+    def delete(self, node_id: str) -> None:
+        """Permanently drop a node's roster entry (past its reap grace
+        period). The keypair identity survives, but a later rejoin starts
+        a fresh row: new join_order, op_level reset to default."""
+        self._db.execute("DELETE FROM nodes WHERE node_id=?", (node_id,))
+        self._db.commit()
 
     def set_op_level(self, node_id: str, level: OpLevel) -> NodeInfo | None:
         info = self.get(node_id)
