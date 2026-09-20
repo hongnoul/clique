@@ -201,6 +201,41 @@ async def clique_status() -> dict:
 
 
 @mcp.tool()
+async def clique_open_dashboard(open_browser: bool = True) -> dict:
+    """Check the clique web GUI (dev server dashboard at /dash) and open
+    it in the default browser on this machine (the MCP client side).
+
+    Returns the dashboard URL, whether the server is reachable, and
+    whether a browser tab was opened. Pass open_browser=False to only
+    health-check without opening anything.
+    """
+    c = await _get_client()
+    url = f"{c.base_url}/dash"
+    reachable = False
+    status_code: int | None = None
+    error: str | None = None
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=5.0) as hc:
+            r = await hc.get(url)
+            status_code = r.status_code
+            reachable = r.status_code == 200
+    except Exception as exc:  # noqa: BLE001 - report, don't crash the tool
+        error = str(exc)
+    opened = False
+    if open_browser and reachable:
+        import webbrowser
+        opened = webbrowser.open(url)
+    out: dict[str, Any] = {"url": url, "reachable": reachable,
+                           "opened": opened}
+    if status_code is not None:
+        out["status_code"] = status_code
+    if error:
+        out["error"] = error
+    return out
+
+
+@mcp.tool()
 async def clique_models() -> list[str]:
     """List routable model names (pass one as `model` to clique_chat)."""
     c = await _get_client()

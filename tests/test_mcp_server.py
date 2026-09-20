@@ -153,6 +153,32 @@ async def test_status_and_models(clique):
     assert any("echo" in m for m in models)
 
 
+async def test_open_dashboard_listed():
+    tools = {t.name for t in await mcp_mod.mcp.list_tools()}
+    assert "clique_open_dashboard" in tools
+
+
+async def test_open_dashboard_check_only(clique):
+    """open_browser=False health-checks /dash without opening anything."""
+    base, _server = clique
+    out = await call("clique_open_dashboard", {"open_browser": False})
+    assert out["url"] == f"{base}/dash"
+    assert out["reachable"] is True
+    assert out["status_code"] == 200
+    assert out["opened"] is False
+
+
+async def test_open_dashboard_opens_browser(clique, monkeypatch):
+    """When reachable, the client-side browser is opened on the dash URL."""
+    import webbrowser
+    opened: list[str] = []
+    monkeypatch.setattr(webbrowser, "open",
+                        lambda url: opened.append(url) or True)
+    out = await call("clique_open_dashboard", {})
+    assert out["reachable"] is True and out["opened"] is True
+    assert opened == [out["url"]]
+
+
 async def test_cancel_nonexistent_is_error(clique):
     # surfaced as a tool error (HTTP 404 from the server), not a crash
     from mcp.server.mcpserver.exceptions import UnexpectedToolError
