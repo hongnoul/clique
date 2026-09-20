@@ -317,6 +317,14 @@ class HomeApp:
                 except Exception:
                     pass
 
+            def sync_server_from_input(self) -> None:
+                """Re-read the server box so buttons never act on a stale URL."""
+                try:
+                    self.server_url = _helpers["normalize_server"](
+                        self.query_one("#server", Input).value)
+                except Exception:
+                    pass
+
             async def action_host(self) -> None:
                 await self._run_host()
 
@@ -333,11 +341,7 @@ class HomeApp:
                 await self._run_dash()
 
             async def action_refresh(self) -> None:
-                try:
-                    self.server_url = _helpers["normalize_server"](
-                        self.query_one("#server", Input).value)
-                except Exception:
-                    pass
+                self.sync_server_from_input()
                 await self.refresh_all()
                 self.say("refreshed")
 
@@ -354,8 +358,22 @@ class HomeApp:
                     return
                 self.say(msg)
                 await self.refresh_all()
+                # Just hosted but pointing at an unreachable remote: aim
+                # the box at this machine so Join works with one press.
+                if self._remote is None and self._local.get("server_running"):
+                    addr = self._local.get("server_addr") or ""
+                    port = addr.rsplit(":", 1)[-1] if ":" in addr else "7777"
+                    self.server_url = f"http://127.0.0.1:{port}"
+                    try:
+                        self.query_one("#server", Input).value = self.server_url
+                    except Exception:
+                        pass
+                    await self.refresh_all()
+                    self.say(f"{msg}  (pointing at {self.server_url})")
+                return
 
             async def _run_join(self) -> None:
+                self.sync_server_from_input()
                 self.say(f"joining {self.server_url}...")
                 try:
                     msg = await asyncio.to_thread(
@@ -371,6 +389,7 @@ class HomeApp:
                 await self.refresh_all()
 
             async def _run_dash(self) -> None:
+                self.sync_server_from_input()
                 # Textual apps cannot nest: quit this app, the run()
                 # wrapper below launches the dashboard in this terminal.
                 self._next = "dash"
@@ -399,6 +418,7 @@ class HomeApp:
                     await self._run_chat()
 
             async def _run_chat(self) -> None:
+                self.sync_server_from_input()
                 try:
                     prompt = self.query_one("#prompt", Input).value.strip()
                 except Exception:
@@ -446,4 +466,15 @@ class HomeApp:
 
 def main(server: str | None = None) -> None:
     """Entry point for `clique` (no args) and `clique ui`."""
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        # Piped / CI: print status instead of launching a fullscreen app.
+        st = local_state()
+        srv = (f"server RUNNING pid={st['server_pid']} {st['server_addr']}"
+               if st["server_running"] else "server not running")
+        node = (f"node JOINED -> {st['agent_server']}"
+                if st["agent_running"] else "node not joined")
+        print(f"{srv}\n{node}\n"
+              "run in a terminal for buttons, or use "
+              "`clique status|serve|join|submit|dash` directly")
+        return
     HomeApp.run(server)
