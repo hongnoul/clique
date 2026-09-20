@@ -141,9 +141,19 @@ main() {
     # symlink entry points onto PATH
     log "linking..."
     mkdir -p "$BIN_DIR"
-    for cmd in clique clique-agent clique-server; do
+    for cmd in clique clique-agent clique-server clique-mcp; do
         ln -sf "$SRC_DIR/.venv/bin/$cmd" "$BIN_DIR/$cmd"
     done
+
+    # Headless MCP setup: register clique-mcp with local agent harnesses.
+    # Pinned to $CLIQUE_SERVER when set, else mDNS discovery at call time.
+    if [ -n "${CLIQUE_SERVER:-}" ]; then
+        "$BIN_DIR/clique" mcp install --url "$CLIQUE_SERVER" || \
+            warn "mcp install failed (rerun: clique mcp install --url $CLIQUE_SERVER)"
+    else
+        "$BIN_DIR/clique" mcp install || \
+            warn "mcp install failed (rerun: clique mcp install)"
+    fi
 
     "$BIN_DIR/clique" --help >/dev/null 2>&1 || err "install check failed ('clique --help')"
     log "installed clique to ${BIN_DIR}/clique"
