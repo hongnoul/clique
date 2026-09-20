@@ -318,7 +318,10 @@ class SchedulerServer:
                     merged[path] = f["text"]
                 request.code.files = merged
             request.prompt = build_code_prompt(request.prompt, request.code)
-            request.max_output_tokens = max(request.max_output_tokens, 2048)
+            # Reasoning models (nemotron et al) spend completion tokens on
+            # thinking before the diff: 2048 truncates mid-fence. 6144
+            # leaves room for think + a real patch on small-context models.
+            request.max_output_tokens = max(request.max_output_tokens, 6144)
         if request.session_id:
             try:
                 session = self.sessions.get(request.session_id)
