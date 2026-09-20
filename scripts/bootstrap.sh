@@ -42,9 +42,11 @@ main() {
     need curl
     need tar
 
-    # find python >= 3.11
+    # find python >= 3.11 (newest first; probe future minors so a
+    # Homebrew/uv python3.15+ never fails the hard-coded list again)
     PY=""
-    for cand in python3.13 python3.12 python3.11 python3; do
+    for cand in python3.16 python3.15 python3.14 python3.13 python3.12 \
+                python3.11 python3; do
         if command -v "$cand" >/dev/null 2>&1; then
             if "$cand" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3,11) else 1)'; then
                 PY="$cand"; break
