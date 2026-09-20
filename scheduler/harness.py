@@ -27,11 +27,24 @@ _FENCE_RE = re.compile(r"```diff\n(.*?)```", re.DOTALL)
 _TEST_ALLOWLIST = ("pytest", "cargo", "go", "npm", "pnpm", "make")
 
 
+def _strip_reasoning(output: str) -> str:
+    """Drop <think> reasoning so draft diffs inside it don't count.
+
+    Reasoning models (nemotron via vLLM) emit thinking that often
+    contains draft ```diff fences, then the real answer after
+    </think>. Some templates omit the opening tag, so split on the
+    last closing tag rather than matching a balanced pair.
+    """
+    if "</think>" in output:
+        return output.rsplit("</think>", 1)[1]
+    return output
+
+
 def extract_diff(output: str) -> str:
     """Return the single fenced diff body. Raise ProtocolError otherwise."""
     if not output:
         raise ProtocolError("diff_missing: empty model output")
-    fences = _FENCE_RE.findall(output)
+    fences = _FENCE_RE.findall(_strip_reasoning(output))
     if not fences:
         raise ProtocolError("diff_missing: no ```diff fence found")
     if len(fences) > 1:

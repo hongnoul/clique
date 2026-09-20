@@ -94,3 +94,11 @@ def test_workspace_rejects_binary(tmp_path):
     mgr = WorkspaceManager(tmp_path / "ws")
     with pytest.raises(WorkspaceError, match="binary_rejected"):
         mgr.create("t-2", CodeTaskSpec(files={"b.bin": "a\x00b"}))
+
+
+def test_extract_diff_strips_think_reasoning():
+    """Reasoning models draft diffs inside <think>; only the answer
+    after </think> counts (live nemotron regression)."""
+    out = ("thinking about it...\n```diff\n--- a/draft.py\n+++ b/draft.py\n"
+           "@@\n-x\n+y\n```\nmore thoughts\n</think>\n" + GOOD)
+    assert harness.extract_diff(out).startswith("--- a/foo.py")
