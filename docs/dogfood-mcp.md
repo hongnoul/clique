@@ -64,3 +64,27 @@ Grown servers run with the pane's privileges by design (they're the
 agent's own hands). The smoke check guards against accidents (syntax,
 missing deps), not malice. Review `~/dogfood-mcp/*/` diffs the way
 you'd review any teammate's PR before opening panes that load them.
+
+## Docs-sync: pushing closed-loop results back to GitHub
+
+The socket VCS is truth for live work; GitHub remains the durable
+public record. When a dogfood pane finishes verified work (code or
+docs), it syncs outward with this exact sequence. Infrastructure only:
+no pane ever commits or pushes by itself.
+
+1. **Draft in the workspace.** All edits happen in the live workspace
+   (`clique_workspace_write/patch`), never directly in the checkout.
+2. **Export the bundle.** `clique_workspace_export` (MCP/server tool),
+   `clique workspace --export <id>` (CLI), or
+   `GET /v1/workspaces/<id>/export?paths=a.md,b.md` (REST). The bundle
+   carries files + git provenance (checkpoint shas).
+3. **Apply on a credentialed box.** `sh scripts/docs-sync.sh
+   /tmp/bundle.json --checkout ~/git/tcj` dry-runs; `--apply` writes.
+   Path guard rejects `..` and absolute paths.
+4. **Human review gate.** Commit + push + PR stay manual. The agent
+   reports the workspace id, export seq, and what changed; a human
+   reviews the diff before it lands on main.
+
+Starter-prompt line for docs-sync panes: "When your work is verified,
+export the workspace and report the bundle seq plus a file list. Do
+not commit, push, or open PRs."
