@@ -121,6 +121,29 @@ def do_leave(force: bool = False) -> str:
     return "force-quit" if force else "left the clique"
 
 
+def read_logs(lines: int = 20) -> str:
+    """Last lines of the server + agent logs. Pure read, never touches procs."""
+    from common.config import load as load_config
+
+    from client import daemon
+
+    config = load_config()
+    parts = []
+    for name in ("server", "agent"):
+        path = daemon.log_file(config.node.data_dir, name)
+        if not path.exists():
+            parts.append(f"== {name}: no log yet ==")
+            continue
+        try:
+            tail = path.read_text(errors="replace").splitlines()[-lines:]
+        except OSError as e:
+            parts.append(f"== {name}: unreadable ({e}) ==")
+            continue
+        body = "\n".join(tail) if tail else "(empty)"
+        parts.append(f"== {name} ({path}) ==\n{body}")
+    return "\n\n".join(parts)
+
+
 def detect_runtime_sync(base_url: str | None = None,
                         model_name: str | None = None) -> tuple[str, str | None, str | None]:
     """Auto-detect echo vs openai-compat. Same probes as `clique onboard`."""
@@ -273,12 +296,14 @@ class HomeApp:
                         yield Button("Stop server", id="stop")
                         yield Button("Join", id="join", variant="primary")
                         yield Button("Leave", id="leave")
+                        yield Button("Logs", id="logs")
                     with Horizontal():
                         yield Input(placeholder="ask the clique... (c to focus)",
                                     id="prompt")
                         yield Button("Send", id="send", variant="primary")
                         yield Button("Dashboard", id="dash")
                     yield Static("", id="answer")
+                    yield Static("server + agent log tails", id="logs")
                     yield Static("ready. h host · j join · c chat · d dash · r refresh · q quit",
                                  id="msg")
                 yield Footer()
@@ -420,6 +445,18 @@ class HomeApp:
                 self.say(msg)
                 await self.refresh_all()
 
+            async def _run_logs(self) -> None:
+                try:
+                    text = await asyncio.to_thread(read_logs)
+                except Exception as e:
+                    self.say(f"logs failed: {e}")
+                    return
+                try:
+                    self.query_one("#logs", Static).update(text[-4000:])
+                except Exception:
+                    pass
+                self.say("showing server + agent log tails")
+
             async def on_button_pressed(self, event) -> None:
                 bid = event.button.id
                 if bid == "host":
@@ -430,6 +467,8 @@ class HomeApp:
                     await self._run_join()
                 elif bid == "leave":
                     await self._run_leave()
+                elif bid == "logs":
+                    await self._run_logs()
                 elif bid == "refresh":
                     await self.action_refresh()
                 elif bid == "dash":

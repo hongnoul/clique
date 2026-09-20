@@ -497,7 +497,8 @@ async def test_home_app_boots_headless():
     async with app.run_test() as pilot:
         await pilot.pause()
         assert sorted(b.id for b in app.query(Button)) == [
-            "dash", "host", "join", "leave", "refresh", "send", "stop"]
+            "dash", "host", "join", "leave", "logs", "refresh", "send",
+            "stop"]
         assert sorted(i.id for i in app.query(Input)) == ["prompt", "server"]
         await app.refresh_all()
         assert "not reachable" in str(app.query_one("#status", Static).content)
@@ -573,3 +574,19 @@ async def test_home_chat_failure_clears_thinking():
             ans = str(app.query_one("#answer", Static).content)
             assert "thinking" not in ans, ans
             assert "boom" in str(app.query_one("#msg", Static).content)
+
+
+async def test_home_logs_button_shows_tails():
+    """Logs button renders server+agent tails without touching procs."""
+    from textual.widgets import Button, Static
+
+    from client.home import HomeApp, read_logs
+
+    assert "server" in read_logs() and "agent" in read_logs()
+    app = HomeApp.build()("http://127.0.0.1:1")
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        assert "logs" in [b.id for b in app.query(Button)]
+        await app._run_logs()
+        pane = str(app.query_one("#logs", Static).content)
+        assert "server" in pane, pane
