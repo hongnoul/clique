@@ -61,26 +61,33 @@ export CLIQUE_SERVER=http://100.83.233.124:7777
 curl -fsSL $CLIQUE_SERVER/join.sh | sh
 export PATH="$HOME/.local/bin:$PATH"
 
-# 2. dry-run first: probes server, detects runtime, warns on drift
-clique onboard --server $CLIQUE_SERVER --dry
+# 2. one step: buttons, no scripts
+clique            # Host Join Chat Dashboard (Join probes server,
+                  # detects runtime, warns on drift, joins)
+```
 
-# 3. wave 1: echo (always works, no model needed)
-clique onboard --server $CLIQUE_SERVER --runtime echo --param-b 7
+Wave 1 (echo, always works): press **Join**. Wave 2+ (real backend):
+Join auto-detects ollama :11434 or llama-server :8080.
 
-# 4. wave 2+: real backend (auto-detects ollama :11434 / llama-server :8080)
-clique onboard --server $CLIQUE_SERVER --dry   # shows what it found
+Headless or explicit (same paths the buttons call):
+
+```bash
+# echo first (proves networking + auth + routing in 60s)
+clique join --server $CLIQUE_SERVER --runtime echo --param-b 7
+# graceful variant: probe + detect + warn, then join in foreground
+clique onboard --server $CLIQUE_SERVER --dry   # check first
 clique onboard --server $CLIQUE_SERVER
 
 # explicit backends:
 # ollama mac:
-clique onboard --server $CLIQUE_SERVER --runtime openai-compat \
+clique join --server $CLIQUE_SERVER --runtime openai-compat \
   --base-url http://127.0.0.1:11434/v1 --model-name qwen2.5-coder:7b --param-b 7
 # vllm box (batching):
-clique onboard --server $CLIQUE_SERVER --runtime openai-compat \
+clique join --server $CLIQUE_SERVER --runtime openai-compat \
   --base-url http://127.0.0.1:8000/v1 --model-name nemotron-3-nano-fp8 \
   --param-b 30 --parallel-slots 16
 
-# 5. verify from anywhere
+# verify from anywhere
 clique nodes --server $CLIQUE_SERVER
 clique submit "write a fizzbuzz in rust" --server $CLIQUE_SERVER
 clique stats --server $CLIQUE_SERVER
