@@ -236,3 +236,14 @@ async def test_workspace_shared_context_roundtrip(clique):
     # git checkpoint works
     flush = await call("clique_workspace_flush", {"workspace_id": wid})
     assert flush["sha"]
+
+
+async def test_self_assess(clique):
+    """Self-assessment aggregates health and yields actionable findings."""
+    out = await call("clique_self_assess", {})
+    assert out["server"]["sha"]
+    assert out["fleet"]["total"] >= 1 and out["fleet"]["ready"] >= 1
+    assert "by_state" in out["queue"]
+    assert isinstance(out["findings"], list) and out["findings"]
+    # healthy echo cluster -> no critical findings
+    assert not any("CRITICAL" in f for f in out["findings"])

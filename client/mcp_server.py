@@ -363,6 +363,84 @@ async def clique_workspace_task(prompt: str, workspace_id: str,
     return result
 
 
+# ---------------------------------------------------------------------------
+# Self-assessment: the clique inspecting its own health and history
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+async def clique_self_assess() -> dict:
+    """Assess the clique's own system state and return findings.
+
+    Aggregates server identity (sha/version), fleet, queue pressure,
+    ledger goodput, advisory suggestions, recent state-repo changes and
+    live workspace count, then derives `findings`: concrete problems an
+    agent could act on (no capacity, queue backlog, high failure rate,
+    pending suggestions). Start every self-improvement loop here.
+    """
+    c = await _get_client()
+    info = await c._get("/v1/clique")
+    nodes = await c.nodes()
+    stats = await c.stats()
+    ledger = stats.get("ledger", {})
+    suggestions = await c.suggestions()
+    try:
+        vcs = await c.vcs_history(limit=5)
+    except Exception:
+        vcs = []
+    try:
+        workspaces = await c.workspaces()
+    except Exception:
+        workspaces = []
+
+    ready = [n for n in nodes if n.status.value == "ready"]
+    busy = [n for n in nodes if n.status.value == "busy"]
+    task_states = stats.get("by_state", {}) or {}
+    queued = int(task_states.get("queued", 0) or 0)
+    lstates = ledger.get("by_state", {}) if isinstance(ledger, dict) else {}
+    succeeded = int(lstates.get("succeeded", 0) or 0)
+    failed = int(lstates.get("failed", 0) or 0)
+    total_done = succeeded + failed
+
+    findings: list[str] = []
+    if not ready and not busy:
+        findings.append("CRITICAL: no ready nodes; the clique cannot "
+                        "serve tasks. Check node agents / runtimes.")
+    if queued > 0 and not ready:
+        findings.append(f"{queued} task(s) queued with no free capacity.")
+    elif queued >= 5:
+        findings.append(f"queue backlog: {queued} waiting; consider "
+                        "adding replicas (see suggestions).")
+    if total_done >= 10 and failed / total_done > 0.2:
+        findings.append(f"high failure rate: {failed}/{total_done} "
+                        "recent tasks failed; inspect worker logs.")
+    for s in suggestions:
+        findings.append(f"suggestion[{s.get('kind')}]: "
+                        f"{s.get('rationale', '')}")
+    if not findings:
+        findings.append("healthy: capacity available, no backlog, "
+                        "no pending suggestions.")
+
+    return {
+        "server": {"sha": info.get("server_sha"),
+                   "protocol": info.get("protocol_version"),
+                   "public_url": info.get("public_url"),
+                   "default_model": info.get("default_model")},
+        "fleet": {"ready": len(ready), "busy": len(busy),
+                  "total": len(nodes),
+                  "nodes": [{"name": n.display_name,
+                             "status": n.status.value,
+                             "model": n.model.family if n.model else None}
+                            for n in nodes]},
+        "queue": {k: v for k, v in stats.items()
+                  if k not in ("nodes", "ledger")},
+        "ledger": ledger,
+        "suggestions": suggestions,
+        "recent_state_changes": vcs,
+        "live_workspaces": len(workspaces),
+        "findings": findings,
+    }
+
+
 def main() -> None:
     """Entry point: serve MCP over stdio."""
     mcp.run(transport="stdio")
