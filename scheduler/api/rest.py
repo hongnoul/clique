@@ -183,6 +183,25 @@ def register_extended_routes(app: "FastAPI", server: "SchedulerServer") -> None:
 
     # ----------------------------------------------- OpenAI-compat completions
 
+    @app.get("/v1/models")
+    async def list_models() -> dict:
+        """OpenAI-compatible model listing for spawn backends (e.g. jcode).
+
+        Advertises the auto aliases plus one entry per live cluster so
+        clients can discover routable model names without prior knowledge.
+        """
+        ids: list[str] = ["clique", "auto"]
+        seen: set[str] = set(ids)
+        for c in server.registry.list_clusters():
+            for candidate in (c.cluster_key, c.model.family):
+                if candidate and candidate not in seen:
+                    ids.append(candidate)
+                    seen.add(candidate)
+        return {"object": "list",
+                "data": [{"id": mid, "object": "model",
+                          "created": 0, "owned_by": "clique"}
+                         for mid in ids]}
+
     @app.post("/v1/chat/completions", response_model=None)
     async def chat_completions(body: dict) -> dict | StreamingResponse:
         """Adapter: wraps a TaskRequest (+ optional session) so existing
