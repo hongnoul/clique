@@ -2,20 +2,17 @@
    /chat): theme tokens, typography, cards, tables, header + menu. Page
    specific layout stays inline in each page. */
 
+/* Dark is the clique's own look, not a mirror of the OS setting: these
+   screens live on a wall or a spare laptop as often as on a desktop.
+   Light is opt-in through the toggle, which persists per browser --
+   and because dark needs no data-theme attribute to win, the first
+   paint is already right, with no flash before chrome.js runs. */
 :root {
   --accent: #6855ff;
   --bg: #0d1117; --fg: #c9d1d9; --card-bg: #161b22; --border: #30363d;
   --link: #58a6ff; --muted: #8b949e; --hover-bg: #21262d;
   --logo-fg: #c199ff;
   color-scheme: dark;
-}
-@media (prefers-color-scheme: light) {
-  :root:not([data-theme="dark"]) {
-    --bg: #f6f8fa; --fg: #24292f; --card-bg: #ffffff; --border: #d0d7de;
-    --link: #0969da; --muted: #57606a; --hover-bg: #eef1f4;
-    --logo-fg: #6b2eb8;
-    color-scheme: light;
-  }
 }
 :root[data-theme="light"] {
   --bg: #f6f8fa; --fg: #24292f; --card-bg: #ffffff; --border: #d0d7de;

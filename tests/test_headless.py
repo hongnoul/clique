@@ -405,7 +405,7 @@ async def test_served_tui_runs_once_as_subprocess(headless_server,
 
 async def test_cli_dash_once(headless_server, capsys):
     """`clique dash --once --server URL` prints the /dash.txt snapshot
-    plus the web UI links, so nobody has to type an address."""
+    plus the web dashboard's address, so nobody has to type one."""
     from typer.testing import CliRunner
 
     from client.cli import app
@@ -417,7 +417,8 @@ async def test_cli_dash_once(headless_server, capsys):
     assert result.exit_code == 0, result.output
     assert "clique:" in result.output
     assert f"{headless_server}/dash" in result.output
-    assert f"{headless_server}/chat" in result.output
+    # one link, not a menu of them: /chat is reachable from the page
+    assert "/chat" not in result.output
 
 
 def _read_until(fd: int, needle: bytes, timeout: float) -> bytes:
@@ -503,7 +504,7 @@ async def test_cli_dash_prefers_public_url(headless_server, monkeypatch):
 
     tunnel = "https://example.trycloudflare.com"
     monkeypatch.setattr(_cli, "_browser_base", lambda client: tunnel)
-    assert f"{tunnel}/dash" in _cli._web_links(_cli._resolve(headless_server))
+    assert f"{tunnel}/dash" in _cli._web_link(_cli._resolve(headless_server))
 
 
 async def test_cli_help_lists_every_command():

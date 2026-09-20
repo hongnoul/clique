@@ -27,8 +27,7 @@ function writeStoredTheme(t) {
 function applyTheme(t) {
   document.documentElement.setAttribute('data-theme', t);
 }
-applyTheme(readStoredTheme()
-  || (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'));
+applyTheme(readStoredTheme() || 'dark');  // dark unless this browser opted out
 themeBtn.addEventListener('click', () => {
   const next = document.documentElement.getAttribute('data-theme') === 'light' ? 'dark' : 'light';
   writeStoredTheme(next);

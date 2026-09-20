@@ -25,7 +25,7 @@ use it:
   clique workspace --create|--watch    live shared workspaces
 
 watch it:
-  clique dash [--once|--full]          terminal dashboard + web UI links
+  clique dash [--once|--full]          terminal dashboard + its web link
   clique nodes / clique stats          nodes and clusters / queue and load
   clique ledger                        accepted-work accounting per node
   clique suggestions [--dismiss ID]    model-change suggestions
@@ -36,8 +36,9 @@ administer it (any joined node may):
   clique clear                         wipe sessions, queue, stored data
   clique mcp install|status|serve      clique tools inside agent harnesses
 
-The web UI is served by the server node at <server>/dash (live) and
-<server>/chat (ask it something); `clique dash` prints both links.
+The web UI is served by the server node at <server>/dash (live), which
+`clique dash` prints; its menu leads to <server>/chat, to ask the
+clique something from a browser.
 
 `serve` and `join` background themselves by default so one terminal can
 run serve, then join, then submit/dash/etc. in sequence; pass
@@ -609,15 +610,14 @@ def _browser_base(client: CliqueClient) -> str:
     return base
 
 
-def _web_links(client: CliqueClient) -> str:
-    """One line of clickable web UI links (terminals hyperlink OSC 8).
+def _web_link(client: CliqueClient) -> str:
+    """The web dashboard's address, clickable (terminals hyperlink OSC 8).
 
     Resolved once by the caller: the live dashboard redraws on a timer
     and should not re-probe the server just to restate its own address.
     """
     base = _browser_base(client)
-    return (f"[dim]web[/] [link={base}/dash]{base}/dash[/link]"
-            f"  [dim]·[/] [link={base}/chat]{base}/chat[/link]")
+    return f"[dim]web[/] [link={base}/dash]{base}/dash[/link]"
 
 
 @app.command()
@@ -628,16 +628,16 @@ def dash(server: str = typer.Option(None),
          full: bool = typer.Option(False, "--full",
                                    help="fullscreen textual TUI "
                                    "(needs local install + tty)")) -> None:
-    """Live terminal dashboard, plus the web dashboard/chat links.
+    """Live terminal dashboard, plus the web dashboard's address.
 
     The live view redraws in place and is left with `q` (or Ctrl+C),
     like `clique logs -f`. For the dashboard without a terminal at all,
     open the web link it prints, or take one snapshot with --once.
     """
     client = _resolve(server)
-    links = _web_links(client)
+    link = _web_link(client)
     if full:
-        console.print(links)
+        console.print(link)
         from client.tui import DashboardApp
         asyncio.run(DashboardApp(client, interval=interval).run_dashboard())
         return
@@ -655,7 +655,7 @@ def dash(server: str = typer.Option(None),
 
     if once:
         console.print(fetch("/dash.txt"))
-        console.print(links)
+        console.print(link)
         return
 
     from client import daemon
@@ -664,7 +664,7 @@ def dash(server: str = typer.Option(None),
             while True:
                 console.clear() if hasattr(console, "clear") else None
                 console.print(fetch("/dash.txt"))
-                console.print(links)
+                console.print(link)
                 console.print("[dim]-- live; q to stop "
                               "(Ctrl+C also works) --[/]")
                 if quit_pressed(interval):  # doubles as the frame delay
