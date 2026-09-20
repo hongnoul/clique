@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -63,16 +62,76 @@ class WorkspaceService:
         self._commit_fn = commit_fn  # optional hook: (ws_id, seq_range, actors) -> sha
         self._ops_since_flush: dict[str, int] = {}
         self._actors_since_flush: dict[str, set[str]] = {}
+        self.rehydrate()
+
+    @staticmethod
+    def _check_path(path: str) -> None:
+        if not path or path.startswith("/") or ".." in Path(path).parts:
+            raise ValueError(f"bad path: {path!r}")
+
+    def rehydrate(self) -> list[str]:
+        """Reload workspaces that have a git repo on disk (server restart).
+
+        Reads head file contents from each repo dir, assigns version 1
+        (history starts fresh; git holds the deep past). Returns ids.
+        """
+        found = []
+        for child in sorted(self.base_dir.iterdir()):
+            if not child.is_dir() or not (child / ".git").exists():
+                continue
+            wid = child.name
+            if wid in self._workspaces:
+                continue
+            ws = Workspace(workspace_id=wid, repo_dir=child)
+            try:
+                from dulwich.repo import Repo
+                Repo(str(child))  # validate
+            except Exception:
+                continue
+            for fp in sorted(child.rglob("*")):
+                if ".git" in fp.parts or not fp.is_file():
+                    continue
+                if fp.name == ".clique-ws":
+                    continue
+                try:
+                    rel = str(fp.relative_to(child))
+                    ws.files[rel] = FileState(text=fp.read_text(), version=1)
+                except (UnicodeDecodeError, OSError):
+                    continue  # skip binaries/unreadables
+            ws.seq = 1
+            self._workspaces[wid] = ws
+            found.append(wid)
+        if found:
+            log.info("rehydrated %d live workspaces: %s", len(found), found)
+        return found
+
+    async def shutdown_flush(self) -> dict[str, str | None]:
+        """Flush all dirty workspaces (call on server shutdown)."""
+        out = {}
+        for wid in list(self._workspaces):
+            try:
+                out[wid] = await self.force_flush(wid)
+            except Exception as e:
+                log.warning("shutdown flush %s failed: %s", wid, e)
+                out[wid] = None
+        return out
 
     # -- lifecycle ------------------------------------------------------
 
     def create(self, workspace_id: str | None = None,
                initial_files: dict[str, str] | None = None) -> Workspace:
         wid = workspace_id or f"w-{uuid.uuid4().hex[:12]}"
+        if not wid or "/" in wid or ".." in wid:
+            raise ValueError(f"bad workspace id: {wid!r}")
         repo_dir = self.base_dir / wid
         repo_dir.mkdir(parents=True, exist_ok=True)
         ws = Workspace(workspace_id=wid, repo_dir=repo_dir)
         for path, text in (initial_files or {}).items():
+            self._check_path(path)
+            if "\x00" in text:
+                raise ValueError(f"binary rejected: {path}")
+            if len(text) > 1_000_000:
+                raise ValueError(f"file too large: {path}")
             ws.files[path] = FileState(text=text, version=1)
             (repo_dir / path).parent.mkdir(parents=True, exist_ok=True)
             (repo_dir / path).write_text(text)
@@ -120,6 +179,9 @@ class WorkspaceService:
         Serialized per workspace. Rebases stale patches onto head.
         """
         ws = self.get(workspace_id)
+        self._check_path(path)
+        if len(ops) > 100:
+            raise ValueError("too many ops in one patch (max 100)")
         async with ws.lock:
             fst = ws.files.get(path)
             if fst is None:
@@ -133,7 +195,8 @@ class WorkspaceService:
             fst.text = new_text
             fst.version += 1
             ws.seq += 1
-            fst.history.append({"seq": ws.seq, "ops": applied_ops,
+            fst.history.append({"seq": ws.seq, "version": fst.version,
+                                "ops": applied_ops,
                                 "actor": actor, "base": base_version,
                                 "rebased": rebased})
             # trim history to last 200 per file
@@ -178,13 +241,13 @@ class WorkspaceService:
 
     def _rebase_ops(self, fst: FileState, base_version: int,
                     ops: list[dict]) -> list[dict]:
-        """Shift line numbers over history entries newer than base_version.
+        """Shift line numbers over ops applied after base_version.
 
-        history entries store seq; version maps 1:1 to history index here
-        since every apply bumps version by 1. Entries with index >=
-        base_version are newer (history[0] produced version 1).
+        Each history entry records the version it produced. Entries with
+        version > base_version are newer than what the client saw.
         """
-        newer = fst.history[base_version:]  # base_version==0 -> all
+        newer = [h for h in fst.history
+                 if h.get("version", 0) > base_version]
         out = [dict(o) for o in ops]
         for h in newer:
             for hop in h["ops"]:

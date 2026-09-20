@@ -107,8 +107,8 @@ class SchedulerServer:
         self.cron = CronService(db, self.router, self.permissions)
         self.suggestions = SuggestionEngine(self.registry, self.router)
         self.vcs = VcsService(config.node.data_dir / "state-repo")
-        self.workspaces = WorkspaceService(
-            config.node.data_dir / "workspaces")
+        self.live_workspaces = WorkspaceService(
+            config.node.data_dir / "live-workspaces")
         self.vcs.register("permissions.json", self.permissions.export_state)
         self.vcs.register("cron.json", self.cron.export_state)
         self.vcs.register("sessions.json", self.sessions.export_state)
@@ -159,6 +159,14 @@ class SchedulerServer:
                 request.session_id, version, "user", raw_code_prompt)
             if not request.model_hint and session.cluster_key:
                 request.model_hint = session.cluster_key
+        if request.workspace_id:
+            # validate workspace exists; stamp head seq so the agent can
+            # detect drift (invalidate msgs carry newer seqs)
+            try:
+                snap = self.live_workspaces.snapshot(request.workspace_id)
+            except KeyError:
+                raise HTTPException(404, "no such workspace")
+            request.workspace_seq = snap["seq"]
         try:
             task_id = self.router.submit(request)
         except OverflowError as e:
@@ -182,6 +190,8 @@ class SchedulerServer:
                 self._tick_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await self._tick_task
+            with contextlib.suppress(Exception):
+                await self.live_workspaces.shutdown_flush()
 
         @app.post("/v1/register")
         async def register(body: dict) -> dict:
@@ -396,7 +406,7 @@ class SchedulerServer:
                                     base_version: int, ops: list[dict],
                                     actor: str) -> dict:
         """Sequenced patch entry: memory apply, broadcast delta, notify agents."""
-        event = await self.workspaces.apply_patch(
+        event = await self.live_workspaces.apply_patch(
             workspace_id, path, base_version, ops, actor)
         topic = f"workspace:{workspace_id}"
         await self.events.publish(
@@ -457,6 +467,12 @@ class SchedulerServer:
                         "succeeded", "failed", "cancelled", "expired"):
                     self.ledger.record(view)
                     await self._settle_race(view)
+                # agent turn end -> checkpoint its workspace so the result
+                # is rollbackable even before the debounce fires
+                wid = view.request.workspace_id if view else None
+                if wid:
+                    with contextlib.suppress(Exception):
+                        await self.live_workspaces.force_flush(wid)
                 sid = view.request.session_id if view else None
                 if sid and result.state == TaskState.SUCCEEDED and result.output:
                     version = self.contexts.latest_version(sid)

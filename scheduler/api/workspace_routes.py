@@ -44,7 +44,7 @@ def register_workspace_routes(app: "FastAPI", server: "SchedulerServer") -> None
     @app.websocket("/ws/workspace/{workspace_id}")
     async def workspace_ws(ws: WebSocket, workspace_id: str) -> None:
         try:
-            server.workspaces.get(workspace_id)
+            server.live_workspaces.get(workspace_id)
         except KeyError:
             await ws.close(code=4404)
             return
@@ -53,7 +53,7 @@ def register_workspace_routes(app: "FastAPI", server: "SchedulerServer") -> None
         topic = f"workspace:{workspace_id}"
         key, q = server.events.subscribe(topic)
         # send initial snapshot so the joiner has head versions
-        snap = server.workspaces.snapshot(workspace_id)
+        snap = server.live_workspaces.snapshot(workspace_id)
         await ws.send_text(protocol.dumps({
             "type": "workspace.snapshot",
             "workspace_id": workspace_id,
@@ -75,21 +75,27 @@ def register_workspace_routes(app: "FastAPI", server: "SchedulerServer") -> None
                 msg = protocol.loads(raw)
                 mtype = msg.get("type")
                 if mtype == protocol.WS_PATCH:
-                    event = await server.apply_workspace_patch(
-                        workspace_id, msg["path"],
-                        int(msg.get("base_version", 0)),
-                        list(msg.get("ops", [])), actor)
+                    try:
+                        event = await server.apply_workspace_patch(
+                            workspace_id, msg["path"],
+                            int(msg.get("base_version", 0)),
+                            list(msg.get("ops", [])), actor)
+                    except ValueError as e:
+                        await ws.send_text(protocol.dumps({
+                            "type": "workspace.error",
+                            "workspace_id": workspace_id,
+                            "error": str(e)}))
                     # direct echo is covered by broadcast; no extra send
                 elif mtype == protocol.WS_SYNC:
                     path = msg.get("path")
                     if path:
-                        st = server.workspaces.file_state(workspace_id, path)
+                        st = server.live_workspaces.file_state(workspace_id, path)
                         await ws.send_text(protocol.dumps(
                             protocol.msg_ws_state(
                                 workspace_id, path, st["version"],
                                 st["seq"], st["text"])))
                     else:
-                        full = server.workspaces.snapshot(workspace_id)
+                        full = server.live_workspaces.snapshot(workspace_id)
                         await ws.send_text(protocol.dumps({
                             "type": "workspace.snapshot",
                             "workspace_id": workspace_id,
@@ -116,9 +122,12 @@ def register_workspace_routes(app: "FastAPI", server: "SchedulerServer") -> None
     async def create_workspace(body: dict, request: Request) -> dict:
         from scheduler.api.rest import _actor
         actor = _actor(server, request)
-        ws = server.workspaces.create(
-            workspace_id=body.get("workspace_id"),
-            initial_files=body.get("files"))
+        try:
+            ws = server.live_workspaces.create(
+                workspace_id=body.get("workspace_id"),
+                initial_files=body.get("files"))
+        except ValueError as e:
+            raise HTTPException(422, str(e))
         await server.events.publish("workspace.created", {
             "workspace_id": ws.workspace_id, "actor": actor})
         return {"workspace_id": ws.workspace_id, "seq": ws.seq}
@@ -126,20 +135,20 @@ def register_workspace_routes(app: "FastAPI", server: "SchedulerServer") -> None
     @app.get("/v1/workspaces")
     async def list_workspaces() -> list[dict]:
         return [{"workspace_id": wid,
-                 "seq": server.workspaces.get(wid).seq}
-                for wid in server.workspaces.list_ids()]
+                 "seq": server.live_workspaces.get(wid).seq}
+                for wid in server.live_workspaces.list_ids()]
 
     @app.get("/v1/workspaces/{workspace_id}")
     async def get_workspace(workspace_id: str) -> dict:
         try:
-            return server.workspaces.snapshot(workspace_id)
+            return server.live_workspaces.snapshot(workspace_id)
         except KeyError:
             raise HTTPException(404, "no such workspace")
 
     @app.get("/v1/workspaces/{workspace_id}/file")
     async def get_workspace_file(workspace_id: str, path: str) -> dict:
         try:
-            return server.workspaces.file_state(workspace_id, path)
+            return server.live_workspaces.file_state(workspace_id, path)
         except KeyError:
             raise HTTPException(404, "no such workspace")
 
@@ -148,7 +157,7 @@ def register_workspace_routes(app: "FastAPI", server: "SchedulerServer") -> None
         from scheduler.api.rest import _actor
         _actor(server, request)
         try:
-            sha = await server.workspaces.force_flush(workspace_id)
+            sha = await server.live_workspaces.force_flush(workspace_id)
         except KeyError:
             raise HTTPException(404, "no such workspace")
         return {"sha": sha}

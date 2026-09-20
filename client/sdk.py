@@ -279,3 +279,24 @@ class CliqueClient:
 
     async def vcs_rollback(self, sha: str) -> dict:
         return await self._post("/v1/vcs/rollback", {"sha": sha})
+
+    # -- live workspaces (realtime collab) -----------------------------------
+
+    async def workspace_create(self, files: dict[str, str] | None = None,
+                               workspace_id: str | None = None) -> dict:
+        return await self._post("/v1/workspaces",
+                                {"files": files or {},
+                                 "workspace_id": workspace_id})
+
+    async def workspaces(self) -> list[dict]:
+        return await self._get("/v1/workspaces")  # type: ignore[return-value]
+
+    async def workspace(self, workspace_id: str) -> dict:
+        return await self._get(f"/v1/workspaces/{workspace_id}")
+
+    async def workspace_file(self, workspace_id: str, path: str) -> dict:
+        return await self._get(f"/v1/workspaces/{workspace_id}/file",
+                               path=path)
+
+    async def workspace_flush(self, workspace_id: str) -> dict:
+        return await self._post(f"/v1/workspaces/{workspace_id}/flush")

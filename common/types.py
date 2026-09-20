@@ -134,6 +134,8 @@ class TaskRequest(BaseModel):
     prompt: str
     session_id: str | None = None
     model_hint: str | None = None  # cluster_key prefix; hard filter when set (omit for auto)
+    workspace_id: str | None = None  # live collab workspace (file mirror)
+    workspace_seq: int = 0  # seq the prompt snapshot was taken at
     max_output_tokens: int = 1024
     idempotency_key: str
     created_at: datetime = Field(default_factory=utcnow)

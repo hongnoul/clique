@@ -681,6 +681,47 @@ def vcs(diff: str = typer.Option(None, "--diff", help="shaA..shaB"),
     asyncio.run(run())
 
 
+@app.command()
+def workspace(list: bool = typer.Option(False, "--list", help="list workspaces"),
+              create: bool = typer.Option(False, "--create",
+                                          help="create from files"),
+              files: str = typer.Option(None, "--files",
+                                        help="JSON dict path->content"),
+              show: str = typer.Option(None, "--show",
+                                       help="workspace id to snapshot"),
+              file: str = typer.Option(None, "--file",
+                                       help="path inside workspace"),
+              flush: str = typer.Option(None, "--flush",
+                                        help="force git checkpoint"),
+              server: str = typer.Option(None)) -> None:
+    """Live realtime workspaces: create, list, snapshot, flush."""
+    import json as _json
+    client = _authed(server)
+
+    async def run() -> None:
+        if create:
+            data = await client.workspace_create(
+                _json.loads(files) if files else {})
+            console.print(f"[green]{data['workspace_id']}[/] seq={data['seq']}")
+        elif show:
+            if file:
+                st = await client.workspace_file(show, file)
+                console.print(f"[bold]{file}[/] v{st['version']}"
+                              f" seq={st['seq']}\n{st['text']}")
+            else:
+                snap = await client.workspace(show)
+                for p, f in snap["files"].items():
+                    console.print(f"[bold]{p}[/] v{f['version']}")
+        elif flush:
+            console.print(await client.workspace_flush(flush))
+        else:
+            for w in await client.workspaces():
+                console.print(f"[bold]{w['workspace_id']}[/]"
+                              f" seq={w['seq']}")
+
+    asyncio.run(run())
+
+
 def main() -> None:
     app()
 
