@@ -17,7 +17,8 @@ Supported harnesses:
   - Windsurf               (~/.codeium/windsurf/mcp_config.json)
   - Claude Desktop (macOS) (~/Library/Application Support/Claude/
                             claude_desktop_config.json)
-  - Jcode                  (~/.jcode/config.toml, ``[mcp_servers.clique]``)
+  - Jcode                  (~/.jcode/mcp.json, ``mcpServers`` map
+                            (jcode reads MCP ONLY here, never config.toml)
 
 Only configs whose parent directory already exists are touched, so we
 never scaffold a harness the user does not have. ``--url`` pins
@@ -132,7 +133,7 @@ def targets(home: Path) -> list[tuple[str, Path, str]]:
         ("claude-desktop",
          home / "Library" / "Application Support" / "Claude" /
          "claude_desktop_config.json", "json"),
-        ("jcode", home / ".jcode" / "config.toml", "toml"),
+        ("jcode", home / ".jcode" / "mcp.json", "json-mcpServers"),
     ]
 
 
@@ -152,6 +153,10 @@ def install(url: str | None = None, home: Path | None = None,
         path.parent.mkdir(parents=True, exist_ok=True)
         if fmt == "json":
             action = _install_json(path, "mcpServers", binary, url)
+        elif fmt == "json-mcpServers":
+            action = _install_named_json(
+                path, "mcpServers", "clique",
+                _server_entry(binary, url))
         else:
             action = _install_toml(path, binary, url)
         results.append(Result(harness, path, action))
@@ -166,7 +171,7 @@ def status(home: Path | None = None) -> list[Result]:
         state = "absent"
         if path.exists():
             text = path.read_text()
-            if fmt == "json":
+            if fmt in ("json", "json-mcpServers"):
                 try:
                     if "clique" in json.loads(text).get("mcpServers", {}):
                         state = "registered"
@@ -373,7 +378,7 @@ def grow(url: str | None = None, home: Path | None = None,
         path.parent.mkdir(parents=True, exist_ok=True)
         for srv in valid:
             entry = _entry_for(srv)
-            if fmt == "json":
+            if fmt in ("json", "json-mcpServers"):
                 action = _install_named_json(path, "mcpServers",
                                              srv.name, entry)
             else:

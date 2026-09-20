@@ -141,8 +141,8 @@ def test_grow_registers_valid_server(home):
     assert servers[0].valid, servers[0].problem
     cursor = json.loads((home / ".cursor" / "mcp.json").read_text())
     assert "plume" in cursor["mcpServers"]
-    jcode_cfg = (home / ".jcode" / "config.toml").read_text()
-    assert "[mcp_servers.plume]" in jcode_cfg
+    jcode_cfg = json.loads((home / ".jcode" / "mcp.json").read_text())
+    assert "plume" in jcode_cfg["mcpServers"]
 
 
 def test_grow_skips_broken_server(home):
@@ -171,3 +171,16 @@ def test_grow_mcp_json_override(home):
     servers = discover_grown(home)
     assert servers[0].command == "node"
     assert servers[0].args == ["server.js"]
+
+
+def test_jcode_registers_into_mcp_json_not_config_toml(home):
+    """Regression: jcode reads MCP ONLY from ~/.jcode/mcp.json, so
+    install/grow must write there. Writing [mcp_servers.*] into
+    config.toml leaves a pane with zero clique tools (lobster)."""
+    from client.mcp_install import install
+    (home / ".jcode").mkdir()
+    install(home=home, binary=BIN)
+    assert (home / ".jcode" / "mcp.json").exists()
+    cfg = json.loads((home / ".jcode" / "mcp.json").read_text())
+    assert cfg["mcpServers"]["clique"]["command"] == BIN
+    assert not (home / ".jcode" / "config.toml").exists()
