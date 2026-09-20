@@ -163,16 +163,20 @@ def tail(data_dir: Path, name: str, lines: int = 40, follow: bool = False) -> No
 _FOOTER = "-- following; q to stop (Ctrl+C also works) --"
 
 
-def _follow_with_quit_key(f) -> None:
-    """Poll `f` for new lines, printing them, until 'q' is pressed or the
-    process is interrupted. On a real terminal the footer stays pinned to
-    the bottom line -- new log lines are printed above it via a
-    clear-and-redraw, the same trick progress bars use -- and it's wiped
-    on the way out so it doesn't linger next to the shell prompt. Piped
-    output just gets the footer once, no redraw games. Uses cbreak mode
-    (not raw) so Ctrl+C still raises KeyboardInterrupt normally; terminal
-    settings are restored in `finally` no matter how the loop exits."""
-    is_tty = sys.stdout.isatty()
+@contextlib.contextmanager
+def quit_key_reader():
+    """Let a live view be left with a keypress, and always hand the
+    terminal back.
+
+    Yields ``pressed(timeout)``: waits up to `timeout` seconds and
+    returns True when q (or Esc) was hit, so a redraw loop waits on the
+    key instead of sleeping through it. Without a tty (piped, CI) it
+    just sleeps and returns False, so those runs stay plain loops.
+
+    cbreak, not raw: Ctrl+C keeps raising KeyboardInterrupt normally.
+    Saved terminal settings are restored in `finally` however the caller
+    leaves -- key, interrupt, or exception.
+    """
     fd = sys.stdin.fileno() if sys.stdin.isatty() else None
     saved_tty = None
     if fd is not None:
@@ -183,6 +187,31 @@ def _follow_with_quit_key(f) -> None:
             tty.setcbreak(fd)
         except Exception:
             fd = None
+
+    def pressed(timeout: float) -> bool:
+        if fd is None:
+            time.sleep(timeout)
+            return False
+        import select
+        ready, _, _ = select.select([sys.stdin], [], [], timeout)
+        return bool(ready) and sys.stdin.read(1).lower() in ("q", "\x1b")
+
+    try:
+        yield pressed
+    finally:
+        if fd is not None and saved_tty is not None:
+            import termios
+            termios.tcsetattr(fd, termios.TCSADRAIN, saved_tty)
+
+
+def _follow_with_quit_key(f) -> None:
+    """Poll `f` for new lines, printing them, until 'q' is pressed or the
+    process is interrupted. On a real terminal the footer stays pinned to
+    the bottom line -- new log lines are printed above it via a
+    clear-and-redraw, the same trick progress bars use -- and it's wiped
+    on the way out so it doesn't linger next to the shell prompt. Piped
+    output just gets the footer once, no redraw games."""
+    is_tty = sys.stdout.isatty()
 
     def emit(line: str) -> None:
         if is_tty:
@@ -200,24 +229,17 @@ def _follow_with_quit_key(f) -> None:
         print(_FOOTER)
 
     try:
-        while True:
-            line = f.readline()
-            if line:
-                emit(line)
-                continue
-            if fd is not None:
-                import select
-                ready, _, _ = select.select([sys.stdin], [], [], 0.3)
-                if ready and sys.stdin.read(1).lower() in ("q", "\x1b"):
+        with quit_key_reader() as pressed:
+            while True:
+                line = f.readline()
+                if line:
+                    emit(line)
+                    continue
+                if pressed(0.3):
                     return
-            else:
-                time.sleep(0.3)
     except KeyboardInterrupt:
         pass
     finally:
         if is_tty:
             sys.stdout.write("\r\033[K\n")  # wipe the footer, leave a clean line
             sys.stdout.flush()
-        if fd is not None and saved_tty is not None:
-            import termios
-            termios.tcsetattr(fd, termios.TCSADRAIN, saved_tty)

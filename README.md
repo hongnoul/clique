@@ -102,11 +102,16 @@ clique join --runtime echo --param-b 7 --name my-laptop
 clique join --runtime openai-compat --model-name qwen2.5-coder:7b --param-b 7
 
 # anywhere on the LAN
+clique help                             # what every command does
 clique nodes
 clique submit "write a fizzbuzz in rust"
 clique stats
-clique dash --server http://<server-ip>:7777   # live terminal dashboard
+clique dash --server http://<server-ip>:7777   # terminal dashboard + web links
 ```
+
+The server node also serves the web UI: `<server>/dash` for the live
+dashboard and `<server>/chat` to ask it something from a browser.
+`clique dash` prints both links, so you never type an address.
 
 ### Join: one line, no token, no GitHub
 
@@ -160,9 +165,11 @@ curl -fsSL --connect-timeout 5 https://<random>.trycloudflare.com/join.sh | sh
 
 `clique` opens the button home (Host, Join, Chat, Dashboard, Stop,
 Leave) when you have a tty; piped runs print `clique status` instead.
-`clique dash` polls the snapshot in a loop; `clique dash --full` opens
-the fullscreen textual dashboard (Devices, Queue, Sessions,
-Governance tabs).
+`clique help` prints what every command does. `clique dash` polls the
+snapshot in a loop and prints the web UI links (`<server>/dash` and
+`<server>/chat`, or the public https URL when a tunnel is up, so a
+phone can open them too); `clique dash --full` opens the fullscreen
+textual dashboard.
 
 Implemented: mDNS discovery, signed registration (first client node is op),
 heartbeats, durable sqlite queue, busyness- and size-aware routing (longer

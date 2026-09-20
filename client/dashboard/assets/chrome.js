@@ -35,8 +35,25 @@ themeBtn.addEventListener('click', () => {
   applyTheme(next);
 });
 
-// --- top-right menu ---
+// --- top-right menu: one nav for every page, built here rather than
+// hand-written per page, so the dashboard and the chat read as two
+// views of one app instead of two pages that link at each other ---
+const PAGES = [
+  { href: '/dash', label: 'Dashboard' },
+  { href: '/chat', label: 'Chat' },
+];
 const menuBtn = $('menuBtn'), menuPanel = $('menuPanel');
+
+menuPanel.replaceChildren(...PAGES.map((page) => {
+  const item = document.createElement('a');
+  item.className = 'menu-item';
+  item.setAttribute('role', 'menuitem');
+  item.textContent = page.label;
+  if (location.pathname === page.href) item.setAttribute('aria-current', 'page');
+  else item.href = page.href;
+  return item;
+}));
+
 function setMenu(open) {
   menuPanel.hidden = !open;
   menuBtn.setAttribute('aria-expanded', String(open));

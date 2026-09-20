@@ -523,8 +523,12 @@ async def test_web_dashboard_served(clique):
     # shared chrome is linked, not inlined per page
     assert assets.status_code == 200 and "--accent" in assets.text
     assert chrome.status_code == 200 and "applyTheme" in chrome.text
-    assert "/chat" in r.text  # menu links to the chat page (notes stub gone)
-    assert "Notes" not in r.text
+    assert "Notes" not in r.text  # the old stub is gone
+    # both views are reachable from the same nav, which chrome.js builds
+    # for every page rather than each page hand-listing the other
+    for href in ("'/dash'", "'/chat'"):
+        assert href in chrome.text, f"shared nav missing {href}"
+    assert "menu-item" not in r.text, "dashboard hand-lists nav items"
     # A merge that pastes chrome.js's theme block back into the page
     # redeclares its consts, and that SyntaxError kills the whole inline
     # script (tables silently stop rendering). Same for double-pasted
