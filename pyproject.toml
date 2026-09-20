@@ -20,6 +20,7 @@ dependencies = [
     "textual",
     "pynacl",
     "certifi",
+    "pytest",  # harness runtime dep: server verifies code tasks with pytest -q
 ]
 
 [project.optional-dependencies]

@@ -784,7 +784,12 @@ class SchedulerServer:
             self.workspaces.apply_patch(result.task_id, diff)
             report = self.workspaces.run_tests(result.task_id, spec)
         except Exception as e:
-            return fail(str(e))
+            failed = fail(str(e))
+            # keep the test report on failure so /tests shows why
+            rep = getattr(e, "report", None)
+            if rep is not None:
+                failed.test_report = rep
+            return failed
         # Publish verified files into code-repo working tree, then commit.
         # Collect every file in the verified workspace (seed + patch adds).
         # Skip test-run artifacts (__pycache__, .pytest_cache, .pyc).

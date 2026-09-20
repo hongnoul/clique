@@ -214,7 +214,9 @@ class WorkspaceManager:
                   "stdout_tail": proc.stdout[-2000:],
                   "stderr_tail": proc.stderr[-2000:]}
         if proc.returncode != 0:
-            raise WorkspaceError(f"tests_failed: rc={proc.returncode}")
+            err = WorkspaceError(f"tests_failed: rc={proc.returncode}")
+            err.report = report  # surface via /v1/code/tasks/{id}/tests
+            raise err
         return report
 
     def cleanup(self, task_id: str) -> None:
