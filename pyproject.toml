@@ -20,6 +20,7 @@ dependencies = [
     "pynacl",
     "certifi",
     "pytest",  # harness runtime dep: server verifies code tasks with pytest -q
+    "mcp>=2",  # clique-mcp: MCP stdio server wrapping the SDK
 ]
 
 [project.optional-dependencies]
@@ -30,6 +31,7 @@ dev = ["pytest", "pytest-asyncio", "ruff"]
 clique = "client.cli:main"
 clique-agent = "node.agent:main"
 clique-server = "scheduler.server:main"
+clique-mcp = "client.mcp_server:main"
 
 [build-system]
 requires = ["setuptools>=68"]
