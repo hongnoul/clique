@@ -84,44 +84,111 @@ set -eu
 CLIQUE_SERVER="__CLIQUE_SERVER__"
 INSTALL_DIR="${CLIQUE_HOME:-$HOME/.clique/app}"
 BIN_DIR="${CLIQUE_BIN:-$HOME/.local/bin}"
-PY=""
-for cand in python3.13 python3.12 python3.11 python3; do
-    if command -v "$cand" >/dev/null 2>&1; then
-        if "$cand" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3,11) else 1)'; then
-            PY="$cand"; break
+
+main() {
+    echo ""
+    echo "   ( )--( )--( )"
+    echo "    |    |    |     clique installer"
+    echo "   ( )--( )--( )   idle laptops, one pool"
+    echo ""
+
+    OS="$(uname -s)"
+    case "$OS" in
+        Linux)  os="linux" ;;
+        Darwin) os="macos" ;;
+        *)      os="$OS" ;;
+    esac
+    ARCH="$(uname -m)"
+    case "$ARCH" in
+        x86_64|amd64)   arch="x86_64" ;;
+        aarch64|arm64)  arch="aarch64" ;;
+        *)              arch="$ARCH" ;;
+    esac
+    log "detected ${os}/${arch}"
+
+    need curl
+    need tar
+
+    PY=""
+    for cand in python3.13 python3.12 python3.11 python3; do
+        if command -v "$cand" >/dev/null 2>&1; then
+            if "$cand" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3,11) else 1)'; then
+                PY="$cand"; break
+            fi
         fi
-    fi
-done
-[ -n "$PY" ] || { echo "error: python 3.11+ required"; exit 1; }
-command -v curl >/dev/null 2>&1 || { echo "error: curl not found"; exit 1; }
-command -v tar >/dev/null 2>&1 || { echo "error: tar not found"; exit 1; }
-case "$INSTALL_DIR" in ""|"/"|"$HOME"|"$HOME/") echo "error: refusing to unpack into '$INSTALL_DIR'"; exit 1;; esac
-tmpfile="${TMPDIR:-/tmp}/clique-app-$$.tgz"
-rm -f "$tmpfile"
-curl -fsSL --max-time 120 "$CLIQUE_SERVER/app.tgz" -o "$tmpfile"
-if ! head -c 2 "$tmpfile" | od -An -tx1 | grep -q "1f 8b"; then
-    echo "error: app bundle is not gzip (wrong server?)"
-    head -c 300 "$tmpfile" | tr -d '\\0' | head -n 5 || true
+    done
+    [ -n "$PY" ] || err "python 3.11+ required (have: $(command -v python3 || echo none))"
+    log "using $($PY --version 2>&1)"
+
+    case "$INSTALL_DIR" in ""|"/"|"$HOME"|"$HOME/") err "refusing to unpack into '$INSTALL_DIR'";; esac
+
+    log "fetching app bundle..."
+    tmpfile="${TMPDIR:-/tmp}/clique-app-$$.tgz"
     rm -f "$tmpfile"
-    exit 1
-fi
-rm -rf "$INSTALL_DIR"
-mkdir -p "$INSTALL_DIR"
-tar -xz -C "$INSTALL_DIR" -f "$tmpfile"
-rm -f "$tmpfile"
-[ -f "$INSTALL_DIR/pyproject.toml" ] || { echo "error: bundle is not a clique checkout"; exit 1; }
-"$PY" -m venv "$INSTALL_DIR/.venv"
-"$INSTALL_DIR/.venv/bin/pip" install -q -U pip
-"$INSTALL_DIR/.venv/bin/pip" install -q -e "$INSTALL_DIR"
-mkdir -p "$BIN_DIR"
-for cmd in clique clique-agent clique-server; do
-    ln -sf "$INSTALL_DIR/.venv/bin/$cmd" "$BIN_DIR/$cmd"
-done
-export CLIQUE_SERVER
-echo "installed: $BIN_DIR/clique (server: $CLIQUE_SERVER)"
-echo "check:     clique onboard --server $CLIQUE_SERVER --dry"
-echo "join:      clique onboard --server $CLIQUE_SERVER"
-echo "(or manual: clique join --server $CLIQUE_SERVER --runtime echo --param-b 7)"
+    trap 'rm -f "$tmpfile"' EXIT INT TERM
+    if ! curl -fsSL --retry 3 --connect-timeout 10 --max-time 120 "$CLIQUE_SERVER/app.tgz" -o "$tmpfile"; then
+        err "download failed from $CLIQUE_SERVER/app.tgz (is the server up?)"
+    fi
+    if ! head -c 2 "$tmpfile" | od -An -tx1 | grep -q "1f 8b"; then
+        head -c 300 "$tmpfile" | tr -d '\\0' | head -n 5 || true
+        err "app bundle is not gzip (wrong server?)"
+    fi
+    log "unpacking..."
+    rm -rf "$INSTALL_DIR"
+    mkdir -p "$INSTALL_DIR"
+    tar -xz -C "$INSTALL_DIR" -f "$tmpfile"
+    rm -f "$tmpfile"
+    trap - EXIT INT TERM
+    [ -f "$INSTALL_DIR/pyproject.toml" ] || err "bundle is not a clique checkout"
+    log "creating virtualenv..."
+    "$PY" -m venv "$INSTALL_DIR/.venv"
+    log "installing clique (this takes a minute)..."
+    "$INSTALL_DIR/.venv/bin/pip" install -q -U pip
+    "$INSTALL_DIR/.venv/bin/pip" install -q -e "$INSTALL_DIR"
+    log "linking..."
+    mkdir -p "$BIN_DIR"
+    for cmd in clique clique-agent clique-server; do
+        ln -sf "$INSTALL_DIR/.venv/bin/$cmd" "$BIN_DIR/$cmd"
+    done
+
+    log "installed clique to ${BIN_DIR}/clique (server: ${CLIQUE_SERVER})"
+
+    case ":${PATH}:" in
+        *":${BIN_DIR}:"*) ;;
+        *)
+            echo ""
+            warn "${BIN_DIR} is not in your PATH"
+            echo "  add it to your shell config:"
+            echo ""
+            echo "    export PATH=\\"${BIN_DIR}:\\$PATH\\""
+            echo ""
+            ;;
+    esac
+
+    if command -v "$BIN_DIR/clique" >/dev/null 2>&1; then
+        "$BIN_DIR/clique" --help >/dev/null 2>&1 || err "install check failed ('clique --help')"
+    fi
+
+    echo ""
+    log "ready. run 'clique onboard --server $CLIQUE_SERVER' to join."
+    echo ""
+    echo "  check first:  clique onboard --server $CLIQUE_SERVER --dry"
+    echo "  join:         clique onboard --server $CLIQUE_SERVER"
+    echo "  (or manual:  clique join --server $CLIQUE_SERVER --runtime echo --param-b 7)"
+    echo ""
+}
+
+log()  { printf '  \\033[32m>\\033[0m %s\\n' "$1"; }
+warn() { printf '  \\033[33m!\\033[0m %s\\n' "$1"; }
+err()  { printf '  \\033[31mx\\033[0m %s\\n' "$1" >&2; exit 1; }
+
+need() {
+    if ! command -v "$1" >/dev/null 2>&1; then
+        err "requires '$1' — install it first"
+    fi
+}
+
+main "$@"
 """
 
 

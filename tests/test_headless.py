@@ -123,7 +123,8 @@ async def test_join_sh_pins_server(headless_server, tmp_path):
     assert "GIT_TERMINAL_PROMPT" not in body
     assert body.startswith("#!/bin/sh")
     assert body.count("#!/bin/sh") == 1  # no doubled shebang
-    assert body.count('echo "installed:') == 1  # no duplicated footer
+    assert "ready." in body  # herdr-style ready line, exactly once
+    assert body.count("ready.") == 1  # no duplicated footer
     # served script is valid POSIX sh
     import subprocess
     script = tmp_path / "join-served.sh"
