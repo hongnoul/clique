@@ -21,6 +21,10 @@ GPU engine: vLLM FP8 `nemotron-3-nano-fp8` on :8000, 340+ TPS aggregate at 32-wa
   `sudo usermod -aG docker asus` then re-login, or `sudo systemctl start vllm`
   if a system unit exists. Until then gx10 serves onboarding + echo tasks only,
   no GPU throughput.
+- **Update: money loop RECOVERED (02:00 ET).** `gx10-vllm` is `ready`
+  (nemotron-3-nano-fp8, 16 slots), `:8000/v1/models` answers, and a live
+  `--model nemotron` submit completed in 7.6s on node `7c1e3619`
+  (succeeded 60+). Someone restarted vLLM. Dogfood waves 1+ are unblocked.
 
 ## Graceful principles
 
