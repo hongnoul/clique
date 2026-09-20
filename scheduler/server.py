@@ -427,6 +427,10 @@ class SchedulerServer:
             cancelled = self.router.cancel(task_id)
             if cancelled:
                 self.workspaces.cleanup(task_id)
+                await self.events.publish("task.finished", {
+                    "task_id": task_id, "state": "cancelled",
+                    "node_id": view.assigned_node},
+                    topic=f"task:{task_id}")
             if cancelled and view.assigned_node:
                 ws = self.conns.get(view.assigned_node)
                 if ws is not None:
@@ -852,6 +856,11 @@ class SchedulerServer:
             if self.router.cancel(tid):
                 self.workspaces.cleanup(tid)
                 self.progress.pop(tid, None)
+                # unblock live watchers (CLI streams both race members;
+                # without this the loser's WS hangs to timeout)
+                await self.events.publish("task.finished", {
+                    "task_id": tid, "state": "cancelled",
+                    "node_id": sib.assigned_node}, topic=f"task:{tid}")
                 # live revoke: tell the node to cancel now, not on lease
                 if sib.assigned_node and sib.attempt_id:
                     ws = self.conns.get(sib.assigned_node)
