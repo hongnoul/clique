@@ -80,8 +80,8 @@ async def test_index_menu_lists_all_flows(headless_server):
     body, _ = await afetch(headless_server, "/")
     for needle in ("/dash.txt", "/tui.py", "/join.sh"):
         assert needle in body, f"menu missing {needle}"
-    assert "CLIQUE_GITHUB_TOKEN" in body  # private repo: warn before install
-    # /join is the spec'd alias of / (rest.py join assets)
+    # no-GitHub flow: join needs no PAT, source comes from /app.tgz
+    assert "no token needed" in body
     alias, _ = await afetch(headless_server, "/join")
     assert alias == body
 
@@ -115,18 +115,13 @@ async def test_tui_py_is_stdlib_only(headless_server):
 async def test_join_sh_pins_server(headless_server, tmp_path):
     body, _ = await afetch(headless_server, "/join.sh")
     assert headless_server in body
-    assert "GIT_TERMINAL_PROMPT=0" in body  # headless-safe, no prompts
-    assert "CLIQUE_GITHUB_TOKEN" in body  # private-repo support ships too
+    # no-GitHub flow: bundle comes from /app.tgz, no git prompts or PATs
+    assert "app.tgz" in body
+    assert "CLIQUE_GITHUB_TOKEN" not in body
+    assert "GIT_TERMINAL_PROMPT" not in body
     assert body.startswith("#!/bin/sh")
     assert body.count("#!/bin/sh") == 1  # no doubled shebang
     assert body.count('echo "installed:') == 1  # no duplicated footer
-    # parity: installer logic lives in scripts/bootstrap.sh, served verbatim
-    disk = (Path(__file__).resolve().parents[1] / "scripts"
-            / "bootstrap.sh").read_text()
-    for line in ("fetch_tarball() {", "diag_clone_failure() {",
-                 'export GIT_CONFIG_KEY_0="http.https://github.com/.extraheader"'):
-        assert line in disk, f"bootstrap.sh lost: {line}"
-        assert line in body, f"join.sh diverged from bootstrap.sh: {line}"
     # served script is valid POSIX sh
     import subprocess
     script = tmp_path / "join-served.sh"
