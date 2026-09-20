@@ -11,7 +11,7 @@ plus real agents over HTTP/WS with an echo runtime.
 Each device (**node**) runs an independent local model. Nodes running the same
 model form a **cluster**. All nodes on the network form the **clique**. One node
 is the **server node**: it holds shared contexts, the node registry, the router,
-permissions, cron, and the shared versioned DB. Every other node is a
+and the shared versioned DB. Every other node is a
 **client node**. Every node is simultaneously a dev environment (jcode-style)
 and a model provider, so all nodes are both servers and clients in the
 inference sense.
@@ -19,7 +19,7 @@ inference sense.
 ```mermaid
 flowchart TB
     subgraph clique [Clique - one LAN]
-        S[Server node<br/>registry + router + contexts + permissions + cron + vcs]
+        S[Server node<br/>registry + router + contexts + vcs]
         subgraph clusterA [Cluster: qwen2.5-coder-7b]
             N1[Node 1]
             N2[Node 2]
@@ -55,8 +55,6 @@ flowchart TB
 | `scheduler/router.py` | Routing policy: eligibility, load/length-aware scoring, one task per node. |
 | `scheduler/context_store.py` | Shared session contexts, intra-cluster shared context. |
 | `scheduler/sessions.py` | Session lifecycle, rare cross-node session migration. |
-| `scheduler/permissions.py` | Op model: first client node is op, /op grant/revoke, policy modes. |
-| `scheduler/cron.py` | Cron jobs requested by any node, approved by an op. |
 | `scheduler/vcs.py` | Git-backed version control of the shared server DB. |
 | `scheduler/workspace.py` | Live realtime workspaces: sequenced in-memory patches, rebase, debounced git checkpoints, rehydrate. |
 | `scheduler/workspaces.py` | Ephemeral per-task CODE_EDIT checkouts: seed, apply diff, run tests. |
@@ -65,7 +63,7 @@ flowchart TB
 | `scheduler/api/rest.py` | HTTP API route specs. |
 | `scheduler/api/ws.py` | WebSocket event stream specs (dashboard, session watch). |
 | `client/sdk.py` | Python client for the server API (used by CLI and dashboard). |
-| `client/cli.py` | Headless CLI: join, status, submit, sessions, op, cron (for GX10 etc. with no monitor). |
+| `client/cli.py` | Headless CLI: join, status, submit, sessions (for GX10 etc. with no monitor). |
 | `client/dashboard/README.md` | Web dashboard views and route spec. |
 | `tests/README.md` | Test plan. |
 
@@ -81,9 +79,8 @@ flowchart TB
 | Resource probing     | `psutil`                                                       | CPU, memory, battery, load, per-process; cross-platform.                                                                                 | Platform-specific calls; note: GPU/VRAM needs per-platform extras (`nvidia-ml-py` on NVIDIA, `powermetrics`/IOKit parsing on macOS) |
 | Model runtime        | `llama.cpp` (`llama-server`) primary; Ollama adapter secondary | GGUF, Metal + CUDA prebuilt binaries, OpenAI-compatible endpoint.                                               | vLLM (heavy for laptops), MLX (Mac-only)                                                                                            |
 | Model download       | `huggingface_hub`                                              | Default model fetch (Qwen 2.5), resumable, revision pinning. Future best-model detection integrates here.                                | manual curl                                                                                                                         |
-| Server DB            | `sqlite3` (stdlib), WAL mode                                   | Contexts, registry snapshots, ledger, cron defs; single-writer fits one server node.                                                     | Postgres (overkill for LAN clique)                                                                                                  |
+| Server DB            | `sqlite3` (stdlib), WAL mode                                   | Contexts, registry snapshots, ledger; single-writer fits one server node.                                                     | Postgres (overkill for LAN clique)                                                                                                  |
 | Shared-DB versioning | `dulwich` (pure-python git)                                    | The requested "local .git in the shared db": snapshot/commit/diff/rollback without shelling out; no adequate non-git OSS beats git here. | `pygit2` (libgit2 build pain), GitPython (subprocess-based)                                                                         |
-| Cron scheduling      | `croniter` (server tick loop drives firing)                    | Cron-expression parsing + next-run computation; jobs live in our DB, approval flow is ours; the server tick loop fires due jobs so no extra scheduler process. | APScheduler (extra machinery for what one tick check does), system crond (no approval hook)                                          |
 | CLI                  | `typer` + `rich`                                               | Headless config/dashboard alternative; `rich` tables for live status.                                                                    | argparse, click                                                                                                                     |
 | Terminal dashboard   | `textual`                                                      | Full TUI dashboard for monitor-less nodes (GX10).                                                                                        | rich.live only                                                                                                                      |
 | Web dashboard        | Static HTML + `htmx` (or Preact) served by FastAPI             | Zero build-step to start; upgrade path later.                                                                                            | React/Next (build overhead)                                                                                                         |
@@ -97,7 +94,7 @@ flowchart TB
 3. **P2 Dashboard/UI** — done: `client/cli.py`, `client/dashboard/index.html` (served at `/dash`), `scheduler/api/*`, headless curl TUI.
 4. **P2 Suggestions** — done: `scheduler/suggestions.py` (overloaded clusters → suggest an idle node switch models, with hysteresis).
 5. **P3 Shared context** — done: `scheduler/context_store.py`, `scheduler/sessions.py` (intra-cluster now, inter-cluster far future).
-6. **P3 Governance/extras** — done: `scheduler/permissions.py` (/op, first-client-is-op), `scheduler/cron.py`, `scheduler/vcs.py` (dulwich state-repo).
+6. **P3 Extras** — `scheduler/vcs.py` (dulwich state-repo). Governance and cron were removed: collaborative dev env, any authenticated node may administrate.
 
 ## Cross-cutting invariants
 
@@ -105,4 +102,3 @@ flowchart TB
 - Session migration between nodes in a cluster is possible via server-held context but discouraged; router treats it as a last resort.
 - Missing telemetry produces conservative routing, never fabricated numbers.
 - Server node is a single point of coordination; durable state + git snapshots make it recoverable, not highly available.
-- Op ordering: the first client node to register is op by default; later nodes are non-op.
