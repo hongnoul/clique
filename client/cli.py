@@ -864,6 +864,59 @@ def _detect_runtime(base_url: str | None, model_name: str | None,
     return "echo", None, None
 
 
+mcp_app = typer.Typer(no_args_is_help=True, add_completion=False,
+                      help="MCP integration for local agent harnesses.")
+app.add_typer(mcp_app, name="mcp")
+
+
+@mcp_app.command("install")
+def mcp_install(url: str = typer.Option(
+        None, help="pin CLIQUE_URL (omit to use LAN discovery)"),
+        show_skipped: bool = typer.Option(
+            False, "--show-skipped", help="also list absent harnesses")) -> None:
+    """Register clique-mcp with every agent harness on this machine.
+
+    Headless and idempotent: finds Claude Code, Codex, Cursor, Windsurf,
+    Claude Desktop and Jcode configs, and adds/updates a ``clique`` stdio
+    entry pointing at the absolute clique-mcp binary.
+    """
+    from client.mcp_install import find_binary, install
+    binary = find_binary()
+    results = install(url=url, binary=binary)
+    touched = 0
+    for r in results:
+        if r.action.startswith("skipped"):
+            if show_skipped:
+                console.print(f"[dim]{r.harness:14} {r.action}[/]")
+            continue
+        touched += 1
+        console.print(f"[green]{r.harness:14} {r.action}[/] -> {r.path}")
+    console.print(f"\nbinary: {binary}")
+    console.print(f"server: {url or 'mDNS discovery at call time'}")
+    if touched == 0:
+        console.print("[yellow]no harness configs found; "
+                      "run with --show-skipped to see paths checked[/]")
+    else:
+        console.print("[dim]restart harnesses to pick up the change[/]")
+
+
+@mcp_app.command("status")
+def mcp_status() -> None:
+    """Show which harnesses have the clique MCP server registered."""
+    from client.mcp_install import status as mcp_st
+    for r in mcp_st():
+        color = {"registered": "green",
+                 "absent": "dim"}.get(r.action, "yellow")
+        console.print(f"[{color}]{r.harness:14} {r.action}[/] {r.path}")
+
+
+@mcp_app.command("serve")
+def mcp_serve() -> None:
+    """Run the MCP server on stdio (what harnesses invoke)."""
+    from client.mcp_server import main as mcp_main
+    mcp_main()
+
+
 def main() -> None:
     app()
 
