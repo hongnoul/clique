@@ -99,30 +99,30 @@ clique stats
 clique dash --server http://<server-ip>:7777   # live terminal dashboard
 ```
 
-### Headless access: zero-install curl flow
+### Join: one line, no token, no GitHub
 
-For monitor-less nodes (GX10 over SSH) with no install yet, the server
-itself serves everything as plain text. Pick the lightest option that works:
+The server serves its own installer plus its own source bundle, so
+joining never touches GitHub, never needs a PAT, and never pastes a
+secret. Auth to the clique happens after install via signed
+registration (node keypair -> bearer token), handled silently by the
+CLI. SSH/Tailscale is only hidden transport for headless boxes.
 
 ```bash
 export CLIQUE=http://<server-ip>:7777
-curl -s $CLIQUE/               # prints this menu
-curl -s $CLIQUE/dash.txt       # snapshot, curl only, no python needed
-watch -n 2 curl -s $CLIQUE/dash.txt   # live loop, curl + watch only
+curl -s $CLIQUE/               # prints the one-line join
+curl -fsSL $CLIQUE/join.sh | sh   # install, server preconfigured
 
-# live fullscreen TUI, stdlib-only (no pip, no clone):
-curl -fsSL $CLIQUE/tui.py -o /tmp/clique-tui.py
-python3 /tmp/clique-tui.py --server $CLIQUE
-
-# one-liner into python3, or snapshot-once mode for pipes/cron:
+# without installing anything (stdlib-only live TUI):
 curl -fsSL $CLIQUE/tui.py | python3 - --server $CLIQUE
-curl -fsSL $CLIQUE/tui.py | python3 - --server $CLIQUE --once
+curl -s $CLIQUE/dash.txt       # snapshot, curl only
 
-# full CLI install (pinned to that server). This repo is private, so
-# export a fine-grained PAT (contents:read on hongnoul/tcj) first or
-# the clone step aborts with "terminal prompts disabled":
-export CLIQUE_GITHUB_TOKEN=github_pat_...
-curl -fsSL $CLIQUE/join.sh | sh
+# every CLI command reads $CLIQUE_SERVER, so set once and forget flags:
+export CLIQUE_SERVER=$CLIQUE
+clique dash                    # live terminal dashboard
+clique join --runtime echo --param-b 7
+
+# headless box over ssh (transport hidden, same join bundle):
+clique join-remote gx10
 ```
 
 After install, `clique dash --server $CLIQUE` polls the same snapshot
@@ -137,30 +137,11 @@ next (sessions, permissions UI, cron, vcs, dashboard).
 
 ### Joining on enterprise Wi-Fi (eduroam, MIT SECURE, etc.)
 
-Enterprise networks block mDNS, so always pass `--server` explicitly:
+Enterprise networks block mDNS, so set `CLIQUE_SERVER` once instead
+of passing `--server` everywhere (see join section above).
 
-```bash
-clique join --server http://<server-ip>:7777 --runtime echo --param-b 7
-```
-
-If `curl http://<server-ip>:7777/v1/clique` times out, the network isolates
-clients from each other. Use a hotspot instead: the server machine (or a
-phone) opens a hotspot, everyone joins it, and the server IP is typically
-`192.168.2.1` (Mac Internet Sharing) or the phone's gateway IP.
-
-One-line install on a new device (this repo is private: create a
-fine-grained PAT with contents read on `hongnoul/tcj`, then fetch the
-installer with the token so both the script download and the clone authenticate):
-
-```bash
-export CLIQUE_GITHUB_TOKEN=github_pat_...
-curl -fsSL -H "Authorization: Bearer $CLIQUE_GITHUB_TOKEN" \
-  https://raw.githubusercontent.com/hongnoul/tcj/main/scripts/bootstrap.sh | sh
-```
-
-Headless (no tty) notes: the installer sets `GIT_TERMINAL_PROMPT=0` and SSH
-`BatchMode` so git fails fast instead of hanging on a credential prompt. The
-token is sent as an `Authorization` header, never embedded in the remote URL.
-If the clone fails, the script prints diagnostics plus a `contents:read`
-tarball fallback. No token and no other GitHub credentials means the clone
-aborts with `could not read Username: terminal prompts disabled`.
+Headless (no tty) notes: the served installer needs only curl, tar,
+and python 3.11 plus. It unpacks the server's own `/app.tgz` bundle,
+so there is no git clone, no credential prompt, and no GitHub token
+anywhere in the path. `scripts/bootstrap.sh` remains for dev clones
+only.
