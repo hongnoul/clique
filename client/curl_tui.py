@@ -113,8 +113,7 @@ def render_lines(snap: dict, width: int = 100,
         ledger = stats.get("ledger") or {}
         if ledger:
             L.append(f"LEDGER: accepted={ledger.get('accepted_tasks', 0)} "
-                     f"earned=${ledger.get('earned_run_rate', 0):.2f} "
-                     f"(run-rate @ ${ledger.get('rate_per_task', 0.20):.2f}/task)")
+                     f"of {ledger.get('total_terminal', 0)} terminal")
     L.append("-" * min(width, 100))
 
     tasks = snap.get("tasks")

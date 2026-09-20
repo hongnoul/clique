@@ -1,9 +1,9 @@
-"""Durable task ledger — accepted-work accounting for the money loop.
+"""Durable task ledger — accepted-work accounting.
 
-README money goal: fixed sponsored rate $0.20 per accepted coding task.
-This module records one row per terminal task (succeeded or failed) so
-the booth screen can show completed x rate plus per-node totals, failures,
-and wasted work. Displayed as run-rate projection until payout consent.
+Contribution accounting for a collaborative dev env: one row per
+terminal task (succeeded or failed) so dashboards can show per-node
+accepted work, failures, and wasted effort. Income generation is a
+non-goal; there is no monetary rate.
 
 Storage: sqlite in the server DB. Append-only; no updates.
 """
@@ -14,8 +14,6 @@ import sqlite3
 from pathlib import Path
 
 from common.types import TaskType, TaskView, utcnow
-
-RATE_PER_ACCEPTED_TASK = 0.20
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS ledger (
@@ -54,39 +52,35 @@ class Ledger:
             and view.result is not None
             and view.result.applied_sha is not None
         )
-        rate = RATE_PER_ACCEPTED_TASK if accepted else 0.0
         self._db.execute(
             "INSERT INTO ledger(task_id, task_type, state, node_id, accepted,"
             " rate, applied_sha, created_at) VALUES (?,?,?,?,?,?,?,?)",
             (view.request.task_id, view.request.task_type.value,
-             view.state.value, view.assigned_node, int(accepted), rate,
+             view.state.value, view.assigned_node, int(accepted), 0.0,
              view.result.applied_sha if view.result else None,
              utcnow().isoformat()),
         )
         self._db.commit()
-        return {"accepted": accepted, "rate": rate}
+        return {"accepted": accepted}
 
     def summary(self) -> dict:
         rows = self._db.execute(
-            "SELECT COUNT(*), COALESCE(SUM(accepted),0),"
-            " COALESCE(SUM(rate),0.0) FROM ledger").fetchone()
-        total, accepted, earned = rows
+            "SELECT COUNT(*), COALESCE(SUM(accepted),0) FROM ledger"
+        ).fetchone()
+        total, accepted = rows
         by_node = self._db.execute(
-            "SELECT node_id, COUNT(*), COALESCE(SUM(accepted),0),"
-            " COALESCE(SUM(rate),0.0) FROM ledger GROUP BY node_id"
+            "SELECT node_id, COUNT(*), COALESCE(SUM(accepted),0)"
+            " FROM ledger GROUP BY node_id"
         ).fetchall()
         by_state = dict(self._db.execute(
             "SELECT state, COUNT(*) FROM ledger GROUP BY state").fetchall())
         return {
             "total_terminal": total,
             "accepted_tasks": accepted,
-            "earned_run_rate": round(earned, 2),
-            "rate_per_task": RATE_PER_ACCEPTED_TASK,
             "by_state": by_state,
             "by_node": [
-                {"node_id": n or "-", "terminal": c,
-                 "accepted": a, "earned": round(e, 2)}
-                for n, c, a, e in by_node],
+                {"node_id": n or "-", "terminal": c, "accepted": a}
+                for n, c, a in by_node],
         }
 
     def export_state(self) -> str:

@@ -36,17 +36,17 @@ The network starts with 5 team laptops: 3 Macs plus 2 Arch or NVIDIA machines, e
 
 Primary model: Qwen2.5-Coder-7B-Instruct Q4, 1 node per replica, 5 replicas. Stretch: Qwen3-30B-A3B MoE Q4, DeepSeek-Coder-V2-Lite 16B, Qwen2.5-Coder-32B, Llama-3.3-70B across 2 to 4 nodes.
 
-## The money goal
+## Non-goal: income
 
-Fixed sponsored rate: **$0.20 per accepted coding task** on the 7B primary model. Sponsor pool **$50** lasts a 3 hour demo at 60 to 100 accepted tasks per hour. Monthly projection is about **$200 per month per laptop** at 4 tasks per hour over 8 idle hours per night. Display as run rate projection, not cash earnings, until payout consent and settlement handling are established.
-
-Early and loyal nodes earn a boost from a separate $25 bonus pool: 2x for the first 10 nodes, 1.5x for the next 20, loyalty up to 1.5x, plus $0.05 per task for zero-drop hours.
+This is a collaborative dev environment. The ledger tracks accepted
+contributions per node (accountability and goodput visibility), not
+earnings. There is no rate, payout, or settlement.
 
 ## Anyone at HackMIT can join live
 
-Any hacker or judge can become a paid node during the demo. Open the join page, download one signed worker binary, and run it. The worker benchmarks the laptop, reports model readiness and resource limits, and advertises capacity only after loading and warmup checks pass.
+Any hacker or judge can become a node during the demo. Open the join page, download one signed worker binary, and run it. The worker benchmarks the laptop, reports model readiness and resource limits, and advertises capacity only after loading and warmup checks pass.
 
-Each new laptop appears on the booth screen within a minute as added goodput and a share of the per task pool.
+Each new laptop appears on the booth screen within a minute as added goodput.
 
 ## What must be shown live
 
@@ -54,17 +54,17 @@ Each new laptop appears on the booth screen within a minute as added goodput and
 2. Multiple laptops complete independent tasks concurrently.
 3. One laptop gets busy or leaves and the scheduler adapts without duplicate committed results.
 4. A node rejoins and goodput recovers.
-5. The ledger shows completed tasks times $0.20 with per laptop totals plus failures and wasted work.
+5. The ledger shows accepted tasks with per laptop totals plus failures and wasted work.
 
 ## Beyond the weekend
 
-Keep the durable ledger, fair queue, recovery, and fixed rate settlement. Add pipeline replicas for the 30B MoE class. Add pipeline sharding toward 70B only after the 7B money loop is stable.
+Keep the durable ledger, fair queue, and recovery. Add pipeline replicas for the 30B MoE class. Add pipeline sharding toward 70B only after the 7B loop is stable.
 
 ## Repo layout
 
 ```text
 tcj/
-  README.md          # this file: product, money goal, quickstart
+  README.md          # this file: product, quickstart
   SPEC.md            # implementation spec
   client/            # consumer API client, CLI, curl TUI
   scheduler/         # API, admission, scheduler, ledger

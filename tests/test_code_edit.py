@@ -195,7 +195,7 @@ async def test_ledger_records_accepted(code_clique, tmp_path):
         async with httpx.AsyncClient() as c:
             ledger = (await c.get(base + "/v1/ledger")).json()
             assert ledger["accepted_tasks"] == 1
-            assert ledger["earned_run_rate"] == 0.20
+            assert ledger["total_terminal"] >= 1
             stats = (await c.get(base + "/v1/stats")).json()
             assert stats["ledger"]["accepted_tasks"] == 1
     finally:

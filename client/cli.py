@@ -491,21 +491,20 @@ def code_submit(prompt: str = typer.Option(..., "--prompt", "-p"),
 
 @app.command()
 def ledger(server: str = typer.Option(None)) -> None:
-    """Accepted-work accounting: totals, per-node earnings, states."""
+    """Accepted-work accounting: per-node contributions and states."""
     client = _resolve(server)
 
     async def run() -> None:
         data = await client.ledger()
-        table = Table(title="ledger (run-rate projection, not payout)")
-        for col in ("node", "terminal", "accepted", "earned"):
+        table = Table(title="ledger (accepted contributions)")
+        for col in ("node", "terminal", "accepted"):
             table.add_column(col)
         for row in data.get("by_node", []):
             table.add_row(str(row["node_id"])[:8], str(row["terminal"]),
-                          str(row["accepted"]), f"${row['earned']:.2f}")
+                          str(row["accepted"]))
         console.print(table)
         console.print(f"accepted={data.get('accepted_tasks')} "
-                      f"earned=${data.get('earned_run_rate', 0):.2f} "
-                      f"@ ${data.get('rate_per_task', 0.20):.2f}/task")
+                      f"of {data.get('total_terminal')} terminal tasks")
 
     asyncio.run(run())
 
