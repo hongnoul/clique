@@ -2,8 +2,9 @@
 
 Core routes (register, tasks, nodes, clusters, clique, stats, join
 assets) live in ``scheduler/server.py``. This module adds the extended
-surface: sessions, suggestions, vcs, kick, and the
-OpenAI-compatible ``/v1/chat/completions`` adapter.
+surface: sessions, suggestions, vcs, kick, the OpenAI-compatible
+``/v1/chat/completions`` adapter, and the web pages (``/dash``,
+``/chat``) with their static assets.
 
 Auth: op-gated routes require ``Authorization: Bearer <token>`` from a
 registered node.
@@ -90,6 +91,25 @@ def register_extended_routes(app: "FastAPI", server: "SchedulerServer") -> None:
     @app.delete("/v1/sessions/{session_id}")
     async def close_session(session_id: str, request: Request) -> dict:
         _actor(server, request)
+        try:
+            server.sessions.close(session_id)
+        except KeyError:
+            raise HTTPException(404, "no such session")
+        return {"closed": True}
+
+    # The web chat at /chat has no keypair, so it cannot mint a node
+    # token for the routes above. These two mirror create/close for it,
+    # on the same trust model as POST /v1/tasks: anyone who can reach
+    # the server on the LAN can already queue work on it.
+
+    @app.post("/v1/chat/sessions")
+    async def create_chat_session(body: dict | None = None) -> dict:
+        session = server.sessions.create(
+            owner_node="web", cluster_key=(body or {}).get("cluster_key", ""))
+        return session.model_dump(mode="json")
+
+    @app.delete("/v1/chat/sessions/{session_id}")
+    async def close_chat_session(session_id: str) -> dict:
         try:
             server.sessions.close(session_id)
         except KeyError:
@@ -434,16 +454,21 @@ def register_extended_routes(app: "FastAPI", server: "SchedulerServer") -> None:
 
     # ---------------------------------------------------------------- web dash
 
-    _assets = (Path(__file__).resolve().parents[2] / "client" / "dashboard"
-               / "assets")
+    _pages = Path(__file__).resolve().parents[2] / "client" / "dashboard"
+    _assets = _pages / "assets"
     if _assets.is_dir():
         app.mount("/assets", StaticFiles(directory=_assets), name="assets")
 
     @app.get("/dash", response_class=HTMLResponse)
     async def web_dash() -> str:
-        from pathlib import Path
-        page = (Path(__file__).resolve().parents[2] / "client" / "dashboard"
-                / "index.html")
+        page = _pages / "index.html"
         if not page.exists():
             raise HTTPException(404, "dashboard not built")
+        return page.read_text()
+
+    @app.get("/chat", response_class=HTMLResponse)
+    async def web_chat() -> str:
+        page = _pages / "chat.html"
+        if not page.exists():
+            raise HTTPException(404, "chat page not built")
         return page.read_text()

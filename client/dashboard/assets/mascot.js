@@ -246,5 +246,45 @@
     };
   }
 
-  window.Mascot = { mount };
+  // Idle repertoire for a self-running companion (see below).
+  const RANDOM_EMOTIONS = ['neutral', 'happy', 'focused', 'sleepy', 'stressed',
+    'sad', 'expression1', 'expression2', 'expression3', 'expression4'];
+
+  /* A mascot that runs itself: loads the artwork into `host`, mounts it,
+   * holds each flashed emotion for a few seconds, drifts through idle
+   * expressions, and reacts to clicks. flash() is the one entry point
+   * for every trigger (live events, the idle timer, clicks) and is
+   * rate-limited there, so rapid-fire triggers can't retarget the lid
+   * animation faster than it can settle -- which reads as flashing
+   * instability rather than as a reaction.
+   */
+  function companion(host, src = '/assets/EyeQ.svg') {
+    const COOLDOWN_MS = 900;
+    const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+    let rig = null, holdTimer = 0, lastFlashAt = 0;
+    fetch(src).then((r) => r.text()).then((svg) => {
+      host.innerHTML = svg;
+      rig = mount(host);  // resting state: no eyelid, wide open
+    }).catch(console.error);
+
+    const pick = () => RANDOM_EMOTIONS[Math.floor(Math.random() * RANDOM_EMOTIONS.length)];
+    function flash(name, holdMs = 4000) {
+      if (!rig) return;
+      const now = Date.now();
+      if (now - lastFlashAt < COOLDOWN_MS) return;
+      lastFlashAt = now;
+      rig.setEmotion(name);
+      clearTimeout(holdTimer);
+      holdTimer = setTimeout(() => rig.setEmotion('none'), holdMs);
+    }
+    function scheduleIdle() {
+      setTimeout(() => { flash(pick()); scheduleIdle(); },
+                 15000 + Math.random() * 25000);  // every 15-40s
+    }
+    if (!reduced) scheduleIdle();
+    host.addEventListener('click', () => flash(pick()));
+    return { flash };
+  }
+
+  window.Mascot = { mount, companion };
 })();

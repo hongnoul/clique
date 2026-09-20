@@ -1,0 +1,552 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>clique chat</title>
+<link rel="stylesheet" href="/assets/base.css">
+<style>
+  /* chats left, one transcript right -- both fill the viewport below the
+     header and scroll internally, same as the dashboard cards. */
+  .chat-layout { flex: 1; min-height: 0; display: grid;
+                 grid-template-columns: 260px 1fr; gap: 1rem; }
+  .sidebar, .thread { display: flex; flex-direction: column; min-height: 0; }
+  .pane-head { display: flex; align-items: baseline; justify-content: space-between;
+               gap: .5rem; flex: none; }
+  .pane-head h2 { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  #sessionList { flex: 1; overflow-y: auto; min-height: 0; margin: 0 -1rem; }
+  .session { display: flex; align-items: center; gap: .4rem; padding: .4rem 1rem;
+             cursor: pointer; border-left: 2px solid transparent; }
+  .session:hover { background: var(--hover-bg); }
+  .session.active { background: var(--hover-bg); border-left-color: var(--accent); }
+  .session .lines { flex: 1; min-width: 0; }
+  .session .title { font-size: .78rem; overflow: hidden;
+                    text-overflow: ellipsis; white-space: nowrap; }
+  .session .meta { font-size: .66rem; color: var(--muted); }
+  .session .kill { visibility: hidden; background: none; border: 0; color: var(--muted);
+                   font: inherit; font-size: .9rem; cursor: pointer; padding: 0 .2rem; }
+  .session:hover .kill { visibility: visible; }
+  .session .kill:hover { color: #f85149; }
+
+  #transcript { flex: 1; overflow-y: auto; min-height: 0; padding: .4rem 0 1rem; }
+  .turn { margin-bottom: 1.1rem; }
+  .turn .role { font-size: .66rem; letter-spacing: .09em; text-transform: uppercase;
+                color: var(--muted); margin-bottom: .3rem; }
+  .turn.user .role { color: var(--accent); }
+  .turn .body { font-size: .82rem; line-height: 1.6; white-space: pre-wrap;
+                word-break: break-word; }
+  .turn.user .body { background: var(--hover-bg); border: 1px solid var(--border);
+                     padding: .5rem .7rem; }
+  .turn .foot { font-size: .66rem; color: var(--muted); margin-top: .35rem; }
+  .turn .foot.err { color: #f85149; }
+  .compaction { display: flex; align-items: center; gap: .6rem; margin: 1.2rem 0;
+                color: var(--muted); font-size: .66rem; letter-spacing: .06em; }
+  .compaction::before, .compaction::after {
+    content: ''; flex: 1; border-top: 1px dashed var(--border); }
+  .cursor { color: var(--accent); animation: blink 1.1s steps(1) infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+  .empty { color: var(--muted); font-size: .8rem; line-height: 1.7; }
+
+  /* composer: EyeQ keeps the left end company, the box takes the rest */
+  #composer { flex: none; border-top: 1px solid var(--border); padding-top: .7rem;
+              display: flex; align-items: center; gap: .9rem; }
+  #mascot { flex: none; width: 92px; height: 80px; cursor: pointer; }
+  #mascot svg { width: 100%; height: 100%; display: block; }
+  .composer-main { flex: 1; min-width: 0; display: flex; flex-direction: column;
+                   gap: .5rem; }
+  #prompt { background: var(--bg); color: var(--fg); border: 1px solid var(--border);
+            border-radius: 0; font: inherit; font-size: .82rem; line-height: 1.5;
+            padding: .55rem .7rem; resize: none; min-height: 2.6rem; max-height: 28vh; }
+  #prompt:focus { outline: none; border-color: var(--accent); }
+  .composer-actions { display: flex; align-items: center; justify-content: space-between;
+                      gap: .5rem; }
+  .btn, select { background: var(--card-bg); color: var(--fg); font: inherit;
+                 font-size: .75rem; border: 1px solid var(--border); border-radius: 0;
+                 padding: .35rem .7rem; cursor: pointer; }
+  .btn:hover:not(:disabled), select:hover { border-color: var(--accent); color: var(--accent); }
+  .btn:disabled { color: var(--muted); cursor: default; }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .btn.primary:hover:not(:disabled) { color: #fff; opacity: .9; }
+  .hint { font-size: .66rem; color: var(--muted); }
+
+  @media (max-width: 900px) {
+    .chat-layout { display: flex; flex-direction: column; }
+    .sidebar { flex: none; } #sessionList { max-height: 25vh; }
+    .thread { flex: 1; min-height: 60vh; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">
+    <a id="logo" href="/dash" aria-label="clique dashboard"></a>
+  </div>
+  <div class="header-actions">
+    <button id="themeBtn" class="icon-btn" aria-label="toggle light/dark theme"></button>
+    <div style="position: relative">
+      <button id="menuBtn" class="icon-btn" aria-haspopup="true" aria-expanded="false"
+              aria-label="menu">&#9776;</button>
+      <div id="menuPanel" class="menu-panel" role="menu" hidden>
+        <a href="/dash" class="menu-item" role="menuitem">Dashboard</a>
+      </div>
+    </div>
+  </div>
+</header>
+
+<div class="chat-layout">
+  <div class="card sidebar">
+    <div class="pane-head">
+      <h2>CHATS</h2>
+      <button id="newChat" class="btn">+ new</button>
+    </div>
+    <div id="sessionList"></div>
+  </div>
+  <div class="card thread">
+    <div class="pane-head">
+      <h2 id="threadTitle">NEW CHAT</h2>
+      <span id="threadMeta" class="muted" style="font-size:.7rem"></span>
+    </div>
+    <div id="transcript"></div>
+    <form id="composer">
+      <div id="mascot" title="EyeQ"></div>
+      <div class="composer-main">
+        <textarea id="prompt" rows="1" placeholder="ask the clique..."></textarea>
+        <div class="composer-actions">
+          <span class="hint">enter sends &middot; shift+enter newline</span>
+          <span style="display:flex; gap:.5rem; align-items:center">
+            <select id="model" title="cluster to route to (auto = let the router pick)">
+              <option value="">auto</option>
+            </select>
+            <button id="send" type="submit" class="btn primary">send</button>
+          </span>
+        </div>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script src="/assets/chrome.js"></script>
+<script src="/assets/mascot.js"></script>
+<script>
+// The web chat is the CLI's `clique submit` in a browser: a session per
+// chat (server-held context), POST /v1/tasks per turn, tokens streamed
+// off /ws/tasks/{id}, and /ws/sessions/{id} mirroring turns that other
+// clients (CLI, another tab) take in the same chat.
+const MAX_OUTPUT_TOKENS = 1024;
+const state = {
+  sessions: [],      // Session dicts, newest first
+  sid: null,         // selected session (null = unsent draft)
+  titles: {},        // session_id -> {version, text}
+  nodes: {},         // node_id -> display_name
+  taskId: null,      // our in-flight turn
+  taskWs: null,
+  sessionWs: null,
+  live: null,        // {taskId, body} bubble being streamed into
+};
+
+// EyeQ watches the composer: focused while a turn is out, pleased when
+// it lands, rattled when it does not. Same rig as the dashboard's.
+const mascot = Mascot.companion($('mascot'));
+
+const el = (tag, cls, text) => {
+  const n = document.createElement(tag);
+  if (cls) n.className = cls;
+  if (text !== undefined) n.textContent = text;
+  return n;
+};
+const nodeName = (id) => (id ? (state.nodes[id] || id.slice(0, 8)) : '?');
+
+// ------------------------------------------------------------- transcript
+
+function atBottom() {
+  const t = $('transcript');
+  return t.scrollHeight - t.scrollTop - t.clientHeight < 60;
+}
+function scrollDown() { $('transcript').scrollTop = $('transcript').scrollHeight; }
+
+function addTurn(role, content, opts = {}) {
+  const wrap = el('div', `turn ${role}`);
+  wrap.appendChild(el('div', 'role', role === 'user' ? 'you'
+    : role === 'assistant' ? 'clique' : role));
+  const body = el('div', 'body', content);
+  wrap.appendChild(body);
+  let foot = null;
+  if (opts.foot !== undefined) {
+    foot = el('div', 'foot', opts.foot);
+    wrap.appendChild(foot);
+  }
+  $('transcript').appendChild(wrap);
+  scrollDown();
+  return { wrap, body, foot };
+}
+
+function addCompaction() {
+  $('transcript').appendChild(el('div', 'compaction', 'context compacted'));
+}
+
+function showEmpty() {
+  $('transcript').replaceChildren(el('div', 'empty',
+    'new chat. every turn is a task on the clique: the router picks a ready '
+    + 'node, tokens stream back as they are generated, and the transcript '
+    + 'lives on the server so any node in the cluster can take the next turn.'));
+}
+
+function renderTranscript(turns) {
+  $('transcript').replaceChildren();
+  if (!turns.length) { showEmpty(); return; }
+  for (const t of turns) {
+    if (t.kind === 'compaction') { addCompaction(); continue; }
+    addTurn(t.role === 'user' ? 'user' : t.role === 'assistant' ? 'assistant' : 'system',
+            t.content || '');
+  }
+  scrollDown();
+}
+
+// ---------------------------------------------------------------- sidebar
+
+function titleOf(session) {
+  const cached = state.titles[session.session_id];
+  if (cached && (cached.text || cached.version >= session.context_version)) {
+    return cached.text || 'empty chat';
+  }
+  return session.session_id;
+}
+
+async function learnTitle(session) {
+  const cached = state.titles[session.session_id];
+  if (cached && cached.text) return false;
+  if (!session.context_version) {
+    state.titles[session.session_id] = { version: 0, text: '' };
+    return false;
+  }
+  try {
+    const detail = await j(`/v1/sessions/${session.session_id}`);
+    const turns = JSON.parse(detail.context || '[]');
+    const first = turns.find((t) => t.role === 'user' && t.kind !== 'compaction');
+    const text = first ? first.content.trim().split('\n')[0].slice(0, 60) : '';
+    state.titles[session.session_id] = { version: detail.context_version, text };
+    return true;
+  } catch (e) { return false; }
+}
+
+function renderSessions() {
+  const list = $('sessionList');
+  list.replaceChildren();
+  if (!state.sessions.length) {
+    const none = el('div', 'empty', 'no chats yet');
+    none.style.padding = '.4rem 1rem';
+    list.appendChild(none);
+    return;
+  }
+  for (const s of state.sessions) {
+    const row = el('div', `session${s.session_id === state.sid ? ' active' : ''}`);
+    const lines = el('div', 'lines');
+    lines.appendChild(el('div', 'title', titleOf(s)));
+    lines.appendChild(el('div', 'meta',
+      `${s.cluster_key || 'auto'} · ${s.context_version} turn${s.context_version === 1 ? '' : 's'}`));
+    row.appendChild(lines);
+    const kill = el('button', 'kill', '×');
+    kill.title = 'close this chat';
+    kill.onclick = (e) => { e.stopPropagation(); closeSession(s.session_id); };
+    row.appendChild(kill);
+    row.onclick = () => selectSession(s.session_id);
+    list.appendChild(row);
+  }
+}
+
+async function loadSessions() {
+  let sessions;
+  try { sessions = await j('/v1/sessions'); } catch (e) { return; }
+  sessions.sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
+  state.sessions = sessions;
+  renderSessions();
+  let learned = false;
+  for (const s of sessions) learned = (await learnTitle(s)) || learned;
+  if (learned) renderSessions();
+  const current = sessions.find((s) => s.session_id === state.sid);
+  if (current) setThreadHead(current);
+}
+
+async function closeSession(sid) {
+  if (!confirm(`close chat ${sid}? the transcript stays on the server.`)) return;
+  try {
+    await fetch(`/v1/chat/sessions/${sid}`, { method: 'DELETE' });
+  } catch (e) { return; }
+  if (state.sid === sid) newChat();
+  await loadSessions();
+}
+
+// ---------------------------------------------------------------- session
+
+function setThreadHead(session) {
+  if (!session) {
+    $('threadTitle').textContent = 'NEW CHAT';
+    $('threadMeta').textContent = '';
+    return;
+  }
+  $('threadTitle').textContent = (titleOf(session) || session.session_id).toUpperCase();
+  $('threadMeta').textContent = `${session.session_id} · ${session.cluster_key || 'auto'}`
+    + (session.pinned_node ? ` · pinned ${nodeName(session.pinned_node)}` : '');
+}
+
+function newChat() {
+  state.sid = null;
+  closeSessionWs();
+  $('model').value = '';
+  showEmpty();
+  setThreadHead(null);
+  renderSessions();
+  try { localStorage.removeItem('clique-chat-session'); } catch (e) {}
+  $('prompt').focus();
+}
+
+async function loadTranscript(sid) {
+  let detail;
+  try {
+    detail = await j(`/v1/sessions/${sid}`);
+  } catch (e) {
+    $('transcript').replaceChildren(el('div', 'empty', `could not load ${sid}`));
+    return;
+  }
+  renderTranscript(JSON.parse(detail.context || '[]'));
+  setThreadHead(detail);
+  $('model').value = detail.cluster_key || '';
+}
+
+async function selectSession(sid) {
+  if (state.taskId) return;  // a turn of ours is still streaming
+  state.sid = sid;
+  try { localStorage.setItem('clique-chat-session', sid); } catch (e) {}
+  renderSessions();
+  await loadTranscript(sid);
+  connectSessionWs(sid);
+}
+
+// Mirrors turns taken elsewhere (the CLI, another tab) into this view.
+// Our own in-flight task is skipped here: /ws/tasks/{id} already has it.
+function closeSessionWs() {
+  if (state.sessionWs) { const ws = state.sessionWs; state.sessionWs = null; ws.close(); }
+  state.live = null;
+}
+
+function connectSessionWs(sid) {
+  closeSessionWs();
+  const ws = new WebSocket(wsUrl(`/ws/sessions/${sid}`));
+  state.sessionWs = ws;
+  ws.onmessage = (m) => {
+    const { event, payload } = JSON.parse(m.data);
+    if (payload.task_id && payload.task_id === state.taskId) return;
+    if (event === 'session.delta') {
+      if (!state.live || state.live.taskId !== payload.task_id) {
+        state.live = { taskId: payload.task_id,
+                       body: addTurn('assistant', '', { foot: 'streaming from another client' }).body };
+      }
+      const stick = atBottom();
+      state.live.body.textContent += payload.delta;
+      if (stick) scrollDown();
+    } else if (event === 'session.turn') {
+      state.live = null;
+      if (!state.taskId) loadTranscript(sid);
+      loadSessions();
+    } else if (event === 'session.compacting') {
+      addCompaction();
+    } else if (event === 'session.compacted') {
+      if (!state.taskId) loadTranscript(sid);
+    }
+  };
+  ws.onclose = (e) => {
+    if (state.sessionWs !== ws) return;
+    state.sessionWs = null;
+    if (e.code === 4404) return;  // session closed: nothing to reconnect to
+    setTimeout(() => { if (state.sid === sid && !state.sessionWs) connectSessionWs(sid); }, 2000);
+  };
+}
+
+// ------------------------------------------------------------------- send
+
+function setBusy(busy) {
+  const send = $('send');
+  send.textContent = busy ? 'stop' : 'send';
+  send.classList.toggle('primary', !busy);
+  $('newChat').disabled = busy;
+}
+
+async function send() {
+  const text = $('prompt').value.trim();
+  if (!text || state.taskId) return;
+  const cluster = $('model').value;
+  if (!state.sid) {
+    let created;
+    try {
+      created = await (await fetch('/v1/chat/sessions', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ cluster_key: cluster }) })).json();
+    } catch (e) { addTurn('system', `could not open a session: ${e}`); return; }
+    state.sid = created.session_id;
+    try { localStorage.setItem('clique-chat-session', state.sid); } catch (e) {}
+    $('transcript').replaceChildren();
+    setThreadHead(created);
+    connectSessionWs(state.sid);
+    loadSessions();
+  }
+  $('prompt').value = '';
+  autoGrow();
+  addTurn('user', text);
+
+  let task;
+  try {
+    task = await (await fetch('/v1/tasks', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        prompt: text,
+        session_id: state.sid,
+        task_type: 'chat',
+        model_hint: cluster || null,
+        max_output_tokens: MAX_OUTPUT_TOKENS,
+        idempotency_key: randomHex(),
+      }) })).json();
+  } catch (e) {
+    addTurn('system', `submit failed: ${e}`);
+    return;
+  }
+  if (!task.task_id) {
+    addTurn('system', `submit rejected: ${JSON.stringify(task)}`);
+    return;
+  }
+  state.taskId = task.task_id;
+  setBusy(true);
+  mascot.flash('focused');
+  const bubble = addTurn('assistant', '', { foot: `task ${task.task_id.slice(0, 10)} · queued` });
+  bubble.body.appendChild(el('span', 'cursor', '█'));
+  watchOwnTask(task.task_id, bubble);
+}
+
+function appendDelta(bubble, delta) {
+  const stick = atBottom();
+  const cursor = bubble.body.querySelector('.cursor');
+  bubble.body.insertBefore(document.createTextNode(delta), cursor);
+  if (bubble.foot.textContent.endsWith('queued')) {
+    bubble.foot.textContent = bubble.foot.textContent.replace('queued', 'streaming');
+  }
+  if (stick) scrollDown();
+}
+
+// Same contract as the SDK's stream_ws(): tokens over /ws/tasks/{id},
+// falling back to polling GET /v1/tasks/{id} when the socket drops.
+function watchOwnTask(taskId, bubble) {
+  const ws = new WebSocket(wsUrl(`/ws/tasks/${taskId}`));
+  state.taskWs = ws;
+  let finished = false;
+  ws.onmessage = (m) => {
+    const { event, payload } = JSON.parse(m.data);
+    if (event === 'task.progress') appendDelta(bubble, payload.delta || '');
+    else if (event === 'task.finished') { finished = true; finishTurn(taskId, bubble); }
+  };
+  ws.onclose = () => {
+    if (state.taskWs !== ws) return;
+    state.taskWs = null;
+    if (!finished && state.taskId === taskId) pollTask(taskId, bubble);
+  };
+  ws.onerror = () => { /* onclose does the fallback */ };
+}
+
+async function pollTask(taskId, bubble) {
+  while (state.taskId === taskId) {
+    let view;
+    try { view = await j(`/v1/tasks/${taskId}`); } catch (e) { view = null; }
+    if (view) {
+      const shown = bubble.body.textContent.replace('█', '').length;
+      const partial = view.partial_output || '';
+      if (partial.length > shown) appendDelta(bubble, partial.slice(shown));
+      if (['succeeded', 'failed', 'cancelled', 'expired'].includes(view.state)) {
+        finishTurn(taskId, bubble, view);
+        return;
+      }
+    }
+    await new Promise((r) => setTimeout(r, 300));
+  }
+}
+
+async function finishTurn(taskId, bubble, known) {
+  if (state.taskId !== taskId) return;
+  let view = known;
+  if (!view) {
+    try { view = await j(`/v1/tasks/${taskId}`); } catch (e) { view = null; }
+  }
+  const cursor = bubble.body.querySelector('.cursor');
+  if (cursor) cursor.remove();
+  mascot.flash(view && view.state === 'succeeded' ? 'happy' : 'stressed');
+  if (view && view.state === 'succeeded') {
+    const out = (view.result && view.result.output) || bubble.body.textContent;
+    bubble.body.textContent = out;
+    const r = view.result || {};
+    bubble.foot.textContent = `${nodeName(view.assigned_node)} · `
+      + `${(r.wall_time_s || 0).toFixed(1)}s`
+      + (r.output_tokens ? ` · ${r.output_tokens} tok` : '');
+  } else if (view) {
+    const err = view.result && view.result.error;
+    bubble.foot.className = 'foot err';
+    bubble.foot.textContent = err ? `${view.state}: ${err}` : view.state;
+  } else {
+    bubble.foot.className = 'foot err';
+    bubble.foot.textContent = 'lost track of this task';
+  }
+  state.taskId = null;
+  if (state.taskWs) { const ws = state.taskWs; state.taskWs = null; ws.close(); }
+  setBusy(false);
+  loadSessions();
+  $('prompt').focus();
+}
+
+async function stopTurn() {
+  const taskId = state.taskId;
+  if (!taskId) return;
+  try { await fetch(`/v1/tasks/${taskId}/cancel`, { method: 'POST' }); } catch (e) {}
+}
+
+// ------------------------------------------------------------------ boot
+
+function autoGrow() {
+  const box = $('prompt');
+  box.style.height = 'auto';
+  box.style.height = `${box.scrollHeight}px`;
+}
+
+$('composer').addEventListener('submit', (e) => {
+  e.preventDefault();
+  if (state.taskId) stopTurn(); else send();
+});
+$('prompt').addEventListener('input', autoGrow);
+$('prompt').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+});
+$('newChat').addEventListener('click', newChat);
+window.addEventListener('hashchange', () => {
+  const sid = location.hash.slice(1);
+  if (sid) selectSession(sid);
+});
+
+async function boot() {
+  try {
+    for (const n of await j('/v1/nodes')) state.nodes[n.node_id] = n.display_name;
+  } catch (e) {}
+  try {
+    const clusters = await j('/v1/clusters');
+    for (const c of clusters) {
+      const opt = el('option', null, c.cluster_key);
+      opt.value = c.cluster_key;
+      $('model').appendChild(opt);
+    }
+  } catch (e) {}
+  await loadSessions();
+  let want = location.hash.slice(1);
+  if (!want) { try { want = localStorage.getItem('clique-chat-session'); } catch (e) {} }
+  if (want && state.sessions.some((s) => s.session_id === want)) selectSession(want);
+  else newChat();
+  setInterval(() => { if (!state.taskId) loadSessions(); }, 5000);
+}
+boot();
+</script>
+</body>
+</html>

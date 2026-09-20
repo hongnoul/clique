@@ -567,6 +567,7 @@ class SchedulerServer:
                 f"or without installing anything:\n"
                 f"  curl -fsSL {base}/tui.py | python3 - --server "
                 f"{base}\n"
+                f"browser:   {base}/dash (live) · {base}/chat (ask it)\n"
                 f"snapshot:  curl -s {base}/dash.txt\n"
                 f"git-local: curl -s {base}/repo.bundle -o /tmp/tcj.bundle "
                 f"&& git clone /tmp/tcj.bundle ~/tcj\n"

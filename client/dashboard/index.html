@@ -4,40 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>clique dashboard</title>
+<link rel="stylesheet" href="/assets/base.css">
 <style>
-  :root {
-    --accent: #6855ff;
-    --bg: #0d1117; --fg: #c9d1d9; --card-bg: #161b22; --border: #30363d;
-    --link: #58a6ff; --muted: #8b949e; --hover-bg: #21262d;
-    color-scheme: dark;
-  }
-  @media (prefers-color-scheme: light) {
-    :root:not([data-theme="dark"]) {
-      --bg: #f6f8fa; --fg: #24292f; --card-bg: #ffffff; --border: #d0d7de;
-      --link: #0969da; --muted: #57606a; --hover-bg: #eef1f4;
-      color-scheme: light;
-    }
-  }
-  :root[data-theme="light"] {
-    --bg: #f6f8fa; --fg: #24292f; --card-bg: #ffffff; --border: #d0d7de;
-    --link: #0969da; --muted: #57606a; --hover-bg: #eef1f4;
-    color-scheme: light;
-  }
-
-  html, body { height: 100%; }
-  body { font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-         background: var(--bg); color: var(--fg); margin: 0; padding: 1rem;
-         box-sizing: border-box; transition: background .15s, color .15s;
-         display: flex; flex-direction: column; }
-  h2 { font-size: .95rem; color: var(--accent); margin: 0 0 .5rem; }
-  .card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 0;
-          padding: .8rem 1rem; }
-  table { border-collapse: collapse; width: 100%; font-size: .8rem; }
-  th, td { text-align: left; padding: .25rem .5rem; border-bottom: 1px solid var(--border); }
-  th { color: var(--accent); }
-  .badge { padding: 0 .4em; border-radius: 0; font-size: .75rem; color: #fff; }
-  .ready { background: #1f6f3f; } .busy { background: #9e6a03; }
-  .offline { background: #6e1f1f; } .joining { background: #30363d; }
   .op { color: #8250df; } .owner { color: #bc4c00; }
   .muted { color: var(--muted); }
   #liveOut { max-height: 16rem; overflow-y: auto; font-size: .78rem;
@@ -60,31 +28,13 @@
             z-index: 20; cursor: pointer; }
   #mascot svg { width: 100%; height: 100%; display: block; }
 
-  .icon-btn { background: var(--card-bg); border: 1px solid var(--border); color: var(--fg);
-              border-radius: 0; padding: .55rem .9rem; font-size: 1.3rem;
-              cursor: pointer; line-height: 1; }
-  .icon-btn:hover { border-color: var(--accent); color: var(--accent); }
-  #themeBtn svg { height: 1.15rem; width: auto; display: block; }
-  .menu-panel { position: absolute; top: calc(100% + .4rem); right: 0;
-                background: var(--card-bg); border: 1px solid var(--border); border-radius: 0;
-                min-width: 160px; padding: .3rem; box-shadow: 0 8px 24px rgba(0,0,0,.4);
-                z-index: 10; }
-  .menu-panel[hidden] { display: none; }
-  .menu-item { display: flex; align-items: center; justify-content: space-between;
-               gap: .5rem; padding: .45rem .6rem; border-radius: 0; font-size: .85rem;
-               color: var(--fg); text-decoration: none; }
-  .menu-item[aria-disabled="true"] { color: var(--muted); cursor: default; }
-  .menu-item:not([aria-disabled="true"]):hover { background: var(--hover-bg); }
-  .soon { font-size: .65rem; border: 1px solid var(--border); border-radius: 0;
-          padding: 0 .35rem; color: var(--muted); }
-
   /* main layout: nodes/sessions/leaderboard left, queue right -- the
      whole layout fills the remaining viewport height below the header,
      and every table scrolls internally within its own card rather than
      the card growing to fit its content. */
   .layout { flex: 1; min-height: 0; display: grid; grid-template-columns: 1.1fr .9fr;
             gap: 1rem; }
-  .col-left { display: flex; flex-direction: column; gap: 1rem; min-height: 0; }
+  .col-left, .col-right { display: flex; flex-direction: column; gap: 1rem; min-height: 0; }
   .col-left .card, .col-right, .col-right .card {
     display: flex; flex-direction: column; min-height: 0; flex: 1; }
   .card > div:last-child { flex: 1; overflow-y: auto; min-height: 0; }
@@ -96,6 +46,12 @@
 
   .medal { font-size: .95rem; font-weight: 700; }
   .medal.gold { color: #d4af37; } .medal.silver { color: #a8a9ad; } .medal.bronze { color: #cd7f32; }
+
+  /* click-to-watch: running rows open the live output card below */
+  tr.live { cursor: pointer; }
+  tr.live:hover td { background: var(--hover-bg); }
+  tr.watching td { background: var(--hover-bg); box-shadow: inset 2px 0 0 var(--accent); }
+  #liveOut { font-size: .78rem; white-space: pre-wrap; word-break: break-word; }
 </style>
 </head>
 <body>
@@ -109,8 +65,7 @@
       <button id="menuBtn" class="icon-btn" aria-haspopup="true" aria-expanded="false"
               aria-label="menu">&#9776;</button>
       <div id="menuPanel" class="menu-panel" role="menu" hidden>
-        <a href="#" class="menu-item" role="menuitem" aria-disabled="true"
-           onclick="return false">Notes <span class="soon">soon</span></a>
+        <a href="/chat" class="menu-item" role="menuitem">Chat</a>
       </div>
     </div>
   </div>
@@ -133,11 +88,9 @@
   </div>
 </div>
 
+<script src="/assets/chrome.js"></script>
 <script src="/assets/mascot.js"></script>
 <script>
-const $ = (id) => document.getElementById(id);
-const j = async (p) => (await fetch(p)).json();
-
 function badge(s) { return `<span class="badge ${s}">${s}</span>`; }
 
 function renderLeaderboard(tasks, nodesById) {
@@ -163,7 +116,7 @@ async function refresh() {
       j('/v1/nodes'), j('/v1/tasks'), j('/v1/sessions')]);
     const nodesById = {};
     for (const n of nodes) nodesById[n.node_id] = n;
-    $('nodes').innerHTML = '<table><tr><th>name</th><th>status</th><th>op</th>'
+    $('nodes').innerHTML = '<table><tr><th>name</th><th>status</th>'
       + '<th>cluster</th><th>task</th></tr>'
       + nodes.map(n => `<tr><td>${n.display_name}</td><td>${badge(n.status)}</td>`
         + `<td>${n.model ? n.model.family + '-' + n.model.parameter_count_b + 'b' : '-'}</td>`
@@ -187,7 +140,9 @@ async function refresh() {
     }
     $('sessions').innerHTML = sessions.length
       ? '<table><tr><th>id</th><th>cluster</th><th>pinned</th><th>v</th></tr>'
-        + sessions.map(s => `<tr><td>${s.session_id}</td><td>${s.cluster_key || '-'}</td>`
+        + sessions.map(s => `<tr><td><a href="/chat#${s.session_id}"`
+          + ` style="color:var(--link)">${s.session_id}</a></td>`
+          + `<td>${s.cluster_key || '-'}</td>`
           + `<td>${s.pinned_node ? s.pinned_node.slice(0,8) : '-'}</td>`
           + `<td>${s.context_version}</td></tr>`).join('') + '</table>'
       : '<span class="muted">none active</span>';
@@ -255,77 +210,57 @@ themeBtn.addEventListener('click', () => {
   applyTheme(next);
 });
 
-// --- top-right menu (placeholder for a future notes page) ---
-const menuBtn = $('menuBtn'), menuPanel = $('menuPanel');
-function setMenu(open) {
-  menuPanel.hidden = !open;
-  menuBtn.setAttribute('aria-expanded', String(open));
+function showLive(text) { $('liveOut').textContent = text; }
+
+async function watchTask(taskId) {
+  stopWatch();
+  watching = taskId;
+  $('liveTask').textContent = `watching ${taskId.slice(0, 10)}`;
+  showLive('connecting...');
+  try {
+    const cur = await j(`/v1/tasks/${taskId}`);
+    showLive(cur.partial_output
+      || (cur.result && cur.result.output) || '(no output yet)');
+  } catch (e) { showLive(`(fetch failed: ${e})`); return; }
+  const ws = new WebSocket(wsUrl(`/ws/tasks/${taskId}`));
+  watchWs = ws;
+  ws.onmessage = async () => {
+    try {
+      const now = await j(`/v1/tasks/${taskId}`);
+      showLive(now.partial_output
+        || (now.result && now.result.output) || $('liveOut').textContent);
+    } catch (e) { /* keep last text on transient failure */ }
+  };
+  ws.onclose = () => {
+    if (watchWs !== ws) return;
+    $('liveTask').textContent += ' (done)';
+    watchWs = null;
+  };
 }
-menuBtn.addEventListener('click', (e) => {
-  e.stopPropagation();
-  setMenu(menuPanel.hidden);
-});
-document.addEventListener('click', (e) => {
-  if (!menuPanel.hidden && !menuPanel.contains(e.target) && e.target !== menuBtn) setMenu(false);
-});
-document.addEventListener('keydown', (e) => { if (e.key === 'Escape') setMenu(false); });
 
-// --- logo + theme icon: inlined (not <img>) so they can use currentColor
-// and pick up --fg automatically as the theme changes ---
-fetch('/assets/logo.svg').then(r => r.text()).then(t => { $('logo').innerHTML = t; })
-  .catch(console.error);
-fetch('/assets/light_dark.svg').then(r => r.text()).then(t => { themeBtn.innerHTML = t; })
-  .catch(console.error);
+function stopWatch(suffix = '') {
+  if (watchWs) { const ws = watchWs; watchWs = null; ws.close(); }
+  if (suffix && watching) $('liveTask').textContent += suffix;
+  watching = null;
+}
 
-// --- mascot: load inline SVG, map live events to emotions ---
-let mascot = null, moodTimer = 0;
-fetch('/assets/EyeQ.svg').then(r => r.text()).then(t => {
-  $('mascot').innerHTML = t;
-  mascot = Mascot.mount($('mascot'));  // resting state: no eyelid, wide open
-}).catch(console.error);
+// --- mascot: map live events to emotions ---
+const mascot = Mascot.companion($('mascot'));
 const MOODS = { 'task.submitted': 'focused', 'task.assigned': 'focused',
   'task.finished': 'happy', 'node.joined': 'happy', 'suggestion.new': 'stressed',
   'node.left': 'sad', 'node.offline': 'sad', 'node.reaped': 'sad',
   'node.kicked': 'sad', 'server.shutdown': 'sad' };
 
-// Shared entry point for every trigger (WS events, the random scheduler,
-// and clicks) -- rate-limited here so rapid-fire triggers from any of
-// them can't retarget the lid animation faster than it can settle
-// (which reads as flashing/instability, not overload from clicks alone).
-let lastFlashAt = 0;
-const FLASH_COOLDOWN_MS = 900;
-function flashEmotion(name, holdMs = 4000) {
-  if (!mascot) return;
-  const now = Date.now();
-  if (now - lastFlashAt < FLASH_COOLDOWN_MS) return;
-  lastFlashAt = now;
-  mascot.setEmotion(name);
-  clearTimeout(moodTimer);
-  moodTimer = setTimeout(() => mascot.setEmotion('none'), holdMs);
-}
 function mood(event, payload) {
   if (!MOODS[event]) return;
   let m = MOODS[event];
   if (event === 'task.finished' && payload.state && payload.state !== 'succeeded'
       ) m = 'stressed';
-  flashEmotion(m);
+  mascot.flash(m);
 }
-
-// --- random idle expressions + click-to-react ---
-const RANDOM_EMOTIONS = ['neutral', 'happy', 'focused', 'sleepy', 'stressed', 'sad',
-  'expression1', 'expression2', 'expression3', 'expression4'];
-const pickEmotion = () => RANDOM_EMOTIONS[Math.floor(Math.random() * RANDOM_EMOTIONS.length)];
-const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
-function scheduleRandomMood() {
-  const delay = 15000 + Math.random() * 25000; // every 15-40s
-  setTimeout(() => { flashEmotion(pickEmotion()); scheduleRandomMood(); }, delay);
-}
-if (!reducedMotion) scheduleRandomMood();
-$('mascot').addEventListener('click', () => flashEmotion(pickEmotion()));
 
 function connectEvents() {
-  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  const ws = new WebSocket(`${proto}://${location.host}/ws/events`);
+  const ws = new WebSocket(wsUrl('/ws/events'));
   ws.onmessage = (m) => {
     const { event, payload } = JSON.parse(m.data);
     if (event === 'stats.tick') return;
