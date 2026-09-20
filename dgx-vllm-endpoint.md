@@ -64,3 +64,18 @@ agent. gx10 node runs with 16 slots.
 Measured through the full clique pipeline (submit -> route -> vLLM -> stream -> commit):
 - 8 concurrent submits: 79.7s -> 27.9s (ok 8/8)
 - 16 concurrent submits: 53.1s, ok 16/16 (single node)
+
+## Memory rule (learned the hard way, 2026-09-19)
+GB10 unified memory means vLLM's reservation, Ollama's model loads, and the OS
+all share one 121GB pool. At --gpu-memory-utilization 0.80 (~97GB) there is NO
+room for a second model: routing a task to an Ollama-backed node loaded qwen35b
+(+22GB) and hard-locked the box (needed a power cycle).
+
+Policy: gx10 is single-model, all-in on Nemotron via vLLM at 0.80.
+- ollama.service is disabled (binary kept; enable manually if ever needed,
+  but only after dropping vLLM to <=0.60).
+- clique-node-qwen unit removed.
+- Post-restore bench: single 46.8, 8-way 167, 16-way 238, 32-way 355 agg TPS.
+- Real cold-boot verified: after power cycle the docker container and systemd
+  units self-assembled; one unit fix was needed because the gx10 tree synced to
+  merged main (no --active-param-b flag anymore).
