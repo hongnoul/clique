@@ -117,3 +117,57 @@ def test_find_binary_returns_absolute_or_module():
 def test_all_targets_under_home(home):
     for _, path, _ in targets(home):
         assert str(path).startswith(str(home))
+
+
+# -- grow ---------------------------------------------------------------
+
+def _mk_server(base: Path, name: str, body: str) -> Path:
+    d = base / "dogfood-mcp" / name
+    d.mkdir(parents=True)
+    (d / "server.py").write_text(body)
+    return d
+
+
+_GOOD = '"""plume draft helper."""\nfrom mcp.server import Server\nprint("mcp up")\n'
+
+
+def test_grow_registers_valid_server(home):
+    from client.mcp_install import discover_grown, grow
+    (home / ".cursor").mkdir()
+    (home / ".jcode").mkdir()
+    _mk_server(home, "plume", _GOOD)
+    servers, _ = grow(home=home, binary="/usr/bin/clique-mcp", check=True)
+    assert [s.name for s in servers] == ["plume"]
+    assert servers[0].valid, servers[0].problem
+    cursor = json.loads((home / ".cursor" / "mcp.json").read_text())
+    assert "plume" in cursor["mcpServers"]
+    jcode_cfg = (home / ".jcode" / "config.toml").read_text()
+    assert "[mcp_servers.plume]" in jcode_cfg
+
+
+def test_grow_skips_broken_server(home):
+    from client.mcp_install import grow
+    (home / ".cursor").mkdir()
+    _mk_server(home, "bad", "def broken(:\n")
+    servers, _ = grow(home=home, binary="/usr/bin/clique-mcp", check=True)
+    assert len(servers) == 1 and not servers[0].valid
+    cursor = json.loads((home / ".cursor" / "mcp.json").read_text())
+    assert "bad" not in cursor.get("mcpServers", {})
+    assert "clique" in cursor["mcpServers"]  # clique still registers
+
+
+def test_grow_empty_dir_is_quiet(home):
+    from client.mcp_install import discover_grown, grow
+    assert discover_grown(home) == []
+    servers, _ = grow(home=home, binary="/usr/bin/clique-mcp", check=False)
+    assert servers == []
+
+
+def test_grow_mcp_json_override(home):
+    from client.mcp_install import discover_grown
+    d = _mk_server(home, "node-tool", "placeholder mcp server\n")
+    (d / "mcp.json").write_text(json.dumps({"command": "node",
+                                            "args": ["server.js"]}))
+    servers = discover_grown(home)
+    assert servers[0].command == "node"
+    assert servers[0].args == ["server.js"]

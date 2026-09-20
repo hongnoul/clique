@@ -953,6 +953,41 @@ def mcp_serve() -> None:
     mcp_main()
 
 
+@mcp_app.command("grow")
+def mcp_grow(url: str = typer.Option(
+        None, help="pin CLIQUE_URL (omit to use LAN discovery)"),
+        no_check: bool = typer.Option(
+            False, "--no-check",
+            help="skip the smoke validation probe")) -> None:
+    """Register everything in ~/dogfood-mcp as MCP servers.
+
+    Convention for agent-built tools: each ``~/dogfood-mcp/<name>/``
+    holds ``server.py`` (MCP stdio) plus an optional ``mcp.json``
+    overriding {command, args, env}. Valid servers get a named entry
+    in every harness config on this machine, so the next pane (jcode,
+    claude, codex) starts with the accumulated capabilities.
+    Idempotent: re-run any time. ``clique`` itself re-registers first.
+    """
+    from client.mcp_install import dogfood_dir, grow
+    servers, results = grow(url=url, check=not no_check)
+    console.print(f"[dim]dogfood dir: {dogfood_dir()}[/]")
+    if not servers:
+        console.print("[dim]no grown servers yet: agents add "
+                      "~/dogfood-mcp/<name>/server.py, then re-run grow[/]")
+    for s in servers:
+        if s.valid:
+            console.print(f"[green]{s.name:20} valid[/] {s.path}")
+        else:
+            console.print(f"[red]{s.name:20} skipped[/] {s.problem}")
+    for r in results:
+        if r.action.startswith("skipped"):
+            continue
+        color = "green" if r.action in ("installed", "updated") else "yellow"
+        console.print(f"[{color}]{r.harness:24} {r.action}[/]")
+    console.print("[dim]restart harnesses (or open a new pane) "
+                  "to pick up the change[/]")
+
+
 def main() -> None:
     app()
 
