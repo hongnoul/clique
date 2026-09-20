@@ -314,6 +314,7 @@ def submit(prompt: str,
                False, "--new-session", help="start a fresh sticky session"),
            no_session: bool = typer.Option(
                False, "--no-session", help="one-shot task, no conversation memory"),
+           workspace: str = typer.Option(None, "--workspace", help="live workspace id"),
            max_tokens: int = typer.Option(1024)) -> None:
     """Submit a chat turn and wait for the result.
 
@@ -334,6 +335,7 @@ def submit(prompt: str,
             task_id = await client.submit(prompt, model_hint=model,
                                           task_type=task_type,
                                           session_id=sid,
+                                          workspace_id=workspace,
                                           max_output_tokens=max_tokens)
         except httpx.HTTPStatusError as e:
             console.print(f"[red]submit failed[/]: {e.response.status_code} "
@@ -375,6 +377,8 @@ def code_submit(prompt: str = typer.Option(..., "--prompt", "-p"),
                 test: str = typer.Option("pytest -q", "--test",
                                          help="test command, space-separated"),
                 session: str = typer.Option(None, "--session"),
+                workspace: str = typer.Option(None, "--workspace",
+                                             help="live workspace id for realtime collab"),
                 tools: bool = typer.Option(
                     False, "--tools",
                     help="node-local tool loop (capable models only)"),
@@ -424,7 +428,7 @@ def code_submit(prompt: str = typer.Option(..., "--prompt", "-p"),
             return
         task_id = await client.code_submit(
             prompt, files, test_cmd=shlex.split(test),
-            session_id=session, use_tools=tools)
+            session_id=session, workspace_id=workspace, use_tools=tools)
         console.print(f"[dim]code task {task_id} submitted[/]")
         await show_result(task_id)
 
@@ -693,6 +697,10 @@ def workspace(list: bool = typer.Option(False, "--list", help="list workspaces")
                                        help="path inside workspace"),
               flush: str = typer.Option(None, "--flush",
                                         help="force git checkpoint"),
+              history: str = typer.Option(None, "--history",
+                                          help="recent op log for workspace id"),
+              commits: str = typer.Option(None, "--commits",
+                                          help="git checkpoint log for workspace id"),
               server: str = typer.Option(None)) -> None:
     """Live realtime workspaces: create, list, snapshot, flush."""
     import json as _json
@@ -703,6 +711,14 @@ def workspace(list: bool = typer.Option(False, "--list", help="list workspaces")
             data = await client.workspace_create(
                 _json.loads(files) if files else {})
             console.print(f"[green]{data['workspace_id']}[/] seq={data['seq']}")
+        elif history:
+            for h in await client.workspace_history(history, path=file):
+                rb = " [yellow]rebased[/]" if h["rebased"] else ""
+                console.print(f"[dim]seq={h['seq']}[/] {h['path']}"
+                              f" v{h['version']} by {h['actor'][:8]}{rb}")
+        elif commits:
+            for c in await client.workspace_commits(commits):
+                console.print(f"[dim]{c['sha'][:10]}[/] {c['message']}")
         elif show:
             if file:
                 st = await client.workspace_file(show, file)

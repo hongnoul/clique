@@ -18,6 +18,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from common.config import Config
+from common.types import TaskAssignment, TaskRequest
 from scheduler.server import SchedulerServer
 from scheduler.workspace import WorkspaceService
 
@@ -166,7 +167,6 @@ async def test_path_guards(tmp_path):
 
 @pytest.mark.asyncio
 async def test_task_stamps_workspace_seq(tmp_path):
-    from common.types import TaskRequest
     server = make_server(tmp_path)
     server.live_workspaces.create("w1", {"a.py": "x\n"})
     req = TaskRequest(prompt="do work", idempotency_key="k1",
@@ -179,3 +179,73 @@ async def test_task_stamps_workspace_seq(tmp_path):
                       workspace_id="nope")
     with pytest.raises(Exception):
         await server.submit_task(bad)
+
+
+@pytest.mark.asyncio
+async def test_executor_drift_note():
+    from datetime import datetime, timezone
+
+    from node.executor import execute
+
+    class FakeRuntime:
+        def __init__(self):
+            self.seen: list[str] = []
+
+        async def infer_stream(self, prompt, max_tokens):
+            self.seen.append(prompt)
+            yield '{"op": "done"}\n'
+
+    req = TaskRequest(prompt="TOOLS: fix\n--- file: m.py ---\nx\n",
+                      idempotency_key="k")
+    asg = TaskAssignment(task_id="t", attempt_id="a", node_id="n",
+                         lease_expires_at=datetime.now(timezone.utc),
+                         reason="r")
+    rt = FakeRuntime()
+    await execute(None, rt, asg, req,
+                  workspace_drift=lambda: ["m.py"])
+    assert "live workspace changed" in rt.seen[-1]
+    assert "m.py" in rt.seen[-1]
+    rt2 = FakeRuntime()
+    await execute(None, rt2, asg, req, workspace_drift=lambda: [])
+    assert "live workspace changed" not in rt2.seen[-1]
+
+
+def test_history_and_commits_routes(tmp_path):
+    server = make_server(tmp_path)
+    client = TestClient(server.app)
+    server.live_workspaces.create("w1", {"a.py": "1\n"})
+    asyncio.run(server.apply_workspace_patch(
+        "w1", "a.py", 1, [{"op": "insert", "line": 2, "text": "2\n"}], "n1"))
+    r = client.get("/v1/workspaces/w1/history")
+    assert r.status_code == 200 and len(r.json()) == 1
+    assert r.json()[0]["actor"] == "n1"
+    r = client.get("/v1/workspaces/w1/history", params={"path": "a.py"})
+    assert r.status_code == 200
+    r = client.get("/v1/workspaces/w1/history", params={"path": "nope.py"})
+    assert r.status_code == 200 and r.json() == []
+    # force flush then commits visible
+    asyncio.run(server.live_workspaces.force_flush("w1"))
+    r = client.get("/v1/workspaces/w1/commits")
+    assert r.status_code == 200 and len(r.json()) >= 2
+    r = client.get("/v1/workspaces/nope/history")
+    assert r.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_linked_task_result_flushes_workspace(tmp_path):
+    server = make_server(tmp_path)
+    server.live_workspaces.FLUSH_IDLE_S = 3600  # disable debounce
+    server.live_workspaces.create("w1", {"a.py": "x\n"})
+    await server.apply_workspace_patch(
+        "w1", "a.py", 1, [{"op": "insert", "line": 2, "text": "y\n"}], "n1")
+    ws = server.live_workspaces.get("w1")
+    assert ws.dirty is True
+    tid = await server.submit_task(
+        TaskRequest(prompt="w", idempotency_key="k1", workspace_id="w1"))
+    view = server.router.get_task(tid)
+    assert view.request.workspace_seq == 2  # stamped at head
+    # force flush (same call the server result path makes)
+    await server.live_workspaces.force_flush("w1")
+    assert ws.dirty is False
+    commits = server.live_workspaces.git_history("w1")
+    assert any("live checkpoint" in c["message"] for c in commits)

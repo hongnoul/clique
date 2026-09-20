@@ -415,6 +415,9 @@ class SchedulerServer:
                 workspace_id, path, event["version"], event["seq"],
                 event["ops"], actor, event["rebased"]),
             topic=topic)
+        await self.events.publish("workspace.patched", {  # firehose
+            "workspace_id": workspace_id, "path": path,
+            "seq": event["seq"], "actor": actor})
         # notify running agents: push invalidate over /ws/agent so their
         # next inference chunk rereads instead of using stale context
         invalidate = protocol.dumps(protocol.msg_ws_invalidate(
@@ -753,6 +756,16 @@ class SchedulerServer:
                     last_snapshot = now
                     self.vcs.snapshot("periodic state snapshot", "server")
                     self.gc_workspaces()
+                    # durable safety net: checkpoint dirty live workspaces
+                    # even if their debounce tasks were lost on restart
+                    for wid in self.live_workspaces.list_ids():
+                        try:
+                            ws = self.live_workspaces.get(wid)
+                        except KeyError:
+                            continue
+                        if ws.dirty:
+                            with contextlib.suppress(Exception):
+                                await self.live_workspaces.force_flush(wid)
                 await self._schedule_now()
             except Exception:
                 log.exception("tick failed")

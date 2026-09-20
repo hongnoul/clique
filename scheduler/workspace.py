@@ -22,6 +22,7 @@ import asyncio
 import logging
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 
 log = logging.getLogger("clique.workspace")
@@ -284,6 +285,42 @@ class WorkspaceService:
         fst = ws.files.get(path, FileState())
         return {"workspace_id": workspace_id, "path": path,
                 "version": fst.version, "seq": ws.seq, "text": fst.text}
+
+    def history(self, workspace_id: str, path: str | None = None,
+                limit: int = 50) -> list[dict]:
+        """Recent applied ops for audit/dashboard. Newest last."""
+        ws = self.get(workspace_id)
+        out = []
+        paths = [path] if path else sorted(ws.files)
+        for p in paths:
+            fst = ws.files.get(p)
+            if fst is None:
+                continue
+            for h in fst.history[-limit:]:
+                out.append({"path": p, "seq": h["seq"],
+                            "version": h["version"], "actor": h["actor"],
+                            "rebased": h["rebased"], "ops": h["ops"]})
+        out.sort(key=lambda h: h["seq"])
+        return out[-limit:]
+
+    def git_history(self, workspace_id: str, limit: int = 20) -> list[dict]:
+        """Durable checkpoint log from the workspace git repo."""
+        ws = self.get(workspace_id)
+        try:
+            from dulwich.repo import Repo
+            repo = Repo(str(ws.repo_dir))
+            out = []
+            for entry in repo.get_walker(max_entries=limit):
+                c = entry.commit
+                out.append({
+                    "sha": c.id.decode(),
+                    "message": c.message.decode().strip(),
+                    "timestamp": datetime.fromtimestamp(
+                        c.author_time, tz=timezone.utc).isoformat(),
+                })
+            return out
+        except Exception:
+            return []
 
     # -- durable flush -----------------------------------------------------
 

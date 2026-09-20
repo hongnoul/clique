@@ -97,11 +97,15 @@ def _snapshot_from_prompt(prompt: str) -> dict[str, str]:
 
 async def execute(ws, runtime: BaseRuntime, assignment: TaskAssignment,
                   request: TaskRequest,
-                  progress_cb=None) -> str:
+                  progress_cb=None, workspace_drift=None) -> str:
     """Run one task. Returns the final raw output text.
 
     progress_cb(text) is awaited for each streamed chunk when ws is None
     (tests); otherwise progress goes over the agent WS.
+    workspace_drift() -> list[str] | None: optional callback returning
+    paths changed in the live workspace since the task snapshot. When
+    non-empty, a drift note is appended to the transcript so the model
+    rereads those files instead of reasoning on stale content.
     """
     use_tools = "TOOLS:" in request.prompt
     if not use_tools:
@@ -121,6 +125,18 @@ async def execute(ws, runtime: BaseRuntime, assignment: TaskAssignment,
         transcript = request.prompt + "\n" + TOOL_PREAMBLE + "\n"
         final = ""
         for step in range(MAX_STEPS + 1):
+            if workspace_drift is not None:
+                try:
+                    drifted = workspace_drift()
+                except Exception:
+                    drifted = None
+                if drifted:
+                    names = ", ".join(sorted(set(drifted))[:8])
+                    transcript += (
+                        "\nNote: live workspace changed under you since "
+                        f"your snapshot (step {step}): {names}. "
+                        "Re-read those files with the read tool before "
+                        "editing them.\n")
             out = await _collect(runtime, transcript,
                                  request.max_output_tokens)
             await _emit(ws, assignment, f"[step {step}] {out[:2000]}",

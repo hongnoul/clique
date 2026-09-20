@@ -143,7 +143,24 @@ class NodeAgent:
         output = ""
         try:
             from node.executor import execute
-            output = await execute(ws, self.runtime, assignment, request)
+            base_seq = request.workspace_seq or 0
+            seen: list[str] = []
+
+            def _drift() -> list[str]:
+                # invalidate msgs arrive on the session loop; drain paths
+                # newer than the task snapshot exactly once
+                if self.workspace_seq > base_seq and self.workspace_paths:
+                    if not seen:
+                        seen.extend(self.workspace_paths)
+                        return list(self.workspace_paths)
+                return []
+
+            output = await execute(ws, self.runtime, assignment, request,
+                                   workspace_drift=_drift)
+            # clear consumed drift so the next task starts clean
+            if seen:
+                self.workspace_paths = [
+                    p for p in self.workspace_paths if p not in seen]
         except asyncio.CancelledError:
             # abrupt kill: report nothing; the server's lease/heartbeat
             # machinery will requeue this attempt elsewhere

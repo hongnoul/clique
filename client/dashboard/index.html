@@ -31,6 +31,7 @@
   <div class="card"><h2>Queue</h2><div id="tasks"></div></div>
   <div class="card"><h2>Sessions</h2><div id="sessions"></div></div>
   <div class="card"><h2>Suggestions</h2><div id="suggestions"></div></div>
+  <div class="card"><h2>Live workspaces</h2><div id="workspaces"></div></div>
   <div class="card"><h2>Governance</h2><div id="permissions"></div>
     <h2>Cron</h2><div id="cron"></div></div>
   <div class="card"><h2>Snapshots</h2><div id="vcs"></div></div>
@@ -45,11 +46,11 @@ function badge(s) { return `<span class="badge ${s}">${s}</span>`; }
 
 async function refresh() {
   try {
-    const [clique, nodes, tasks, sessions, suggestions, perms, cron, vcs, clusters] =
+    const [clique, nodes, tasks, sessions, suggestions, perms, cron, vcs, clusters, workspaces] =
       await Promise.all([
         j('/v1/clique'), j('/v1/nodes'), j('/v1/tasks'), j('/v1/sessions'),
         j('/v1/suggestions'), j('/v1/permissions'), j('/v1/cron'),
-        j('/v1/vcs/history?limit=10'), j('/v1/clusters')]);
+        j('/v1/vcs/history?limit=10'), j('/v1/clusters'), j('/v1/workspaces')]);
     const clusterKeys = (clusters || []).map(c =>
       `${c.cluster_key}×${(c.node_ids || []).length}`).join(' · ')
       || 'no clusters';
@@ -88,6 +89,11 @@ async function refresh() {
     $('vcs').innerHTML = '<table>'
       + vcs.map(c => `<tr><td>${c.sha.slice(0,10)}</td><td>${c.message}</td>`
         + `<td class="muted">${c.actor}</td></tr>`).join('') + '</table>';
+    $('workspaces').innerHTML = workspaces.length
+      ? '<table><tr><th>id</th><th>seq</th></tr>'
+        + workspaces.map(w => `<tr><td>${w.workspace_id}</td>`
+          + `<td>${w.seq}</td></tr>`).join('') + '</table>'
+      : '<span class="muted">none active</span>';
   } catch (e) { console.error(e); }
 }
 

@@ -74,9 +74,11 @@ class CliqueClient:
     async def submit(self, prompt: str, *, task_type: str = "chat",
                      model_hint: str | None = None,
                      session_id: str | None = None,
+                     workspace_id: str | None = None,
                      max_output_tokens: int = 1024) -> str:
         request = TaskRequest(
             prompt=prompt, model_hint=model_hint, session_id=session_id,
+            workspace_id=workspace_id,
             max_output_tokens=max_output_tokens,
             idempotency_key=uuid.uuid4().hex,
         )
@@ -107,9 +109,11 @@ class CliqueClient:
                           test_cmd: list[str] | None = None,
                           allowed_paths: list[str] | None = None,
                           use_tools: bool = False,
+                          workspace_id: str | None = None,
                           **kw) -> str:
         """Submit a CODE_EDIT task; server verifies the diff before commit."""
         body: dict = {"prompt": prompt,
+                      "workspace_id": workspace_id,
                       "code": {"files": files,
                                "test_cmd": test_cmd or ["pytest", "-q"],
                                "allowed_paths": allowed_paths or [],
@@ -300,3 +304,17 @@ class CliqueClient:
 
     async def workspace_flush(self, workspace_id: str) -> dict:
         return await self._post(f"/v1/workspaces/{workspace_id}/flush")
+
+    async def workspace_history(self, workspace_id: str,
+                                path: str | None = None,
+                                limit: int = 50) -> list[dict]:
+        params: dict = {"limit": limit}
+        if path:
+            params["path"] = path
+        return await self._get(  # type: ignore[return-value]
+            f"/v1/workspaces/{workspace_id}/history", **params)
+
+    async def workspace_commits(self, workspace_id: str,
+                                limit: int = 20) -> list[dict]:
+        return await self._get(  # type: ignore[return-value]
+            f"/v1/workspaces/{workspace_id}/commits", limit=limit)

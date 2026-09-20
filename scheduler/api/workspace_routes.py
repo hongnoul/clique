@@ -161,3 +161,19 @@ def register_workspace_routes(app: "FastAPI", server: "SchedulerServer") -> None
         except KeyError:
             raise HTTPException(404, "no such workspace")
         return {"sha": sha}
+
+    @app.get("/v1/workspaces/{workspace_id}/history")
+    async def workspace_history(workspace_id: str, path: str | None = None,
+                                limit: int = 50) -> list[dict]:
+        try:
+            return server.live_workspaces.history(workspace_id, path, limit)
+        except KeyError:
+            raise HTTPException(404, "no such workspace")
+
+    @app.get("/v1/workspaces/{workspace_id}/commits")
+    async def workspace_commits(workspace_id: str,
+                                limit: int = 20) -> list[dict]:
+        try:
+            return server.live_workspaces.git_history(workspace_id, limit)
+        except KeyError:
+            raise HTTPException(404, "no such workspace")
