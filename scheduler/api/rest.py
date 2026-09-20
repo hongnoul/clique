@@ -337,36 +337,52 @@ def register_extended_routes(app: "FastAPI", server: "SchedulerServer") -> None:
 
         if body.get("stream"):
             async def sse():
+                """Event-driven: wake on task.progress, no fixed poll.
+
+                Subscribes to the per-task topic fed by the agent WS
+                PROGRESS handler. A short-timeout queue wait (0.5s)
+                re-checks router state each loop, so a missed event or
+                a fast terminal task can never hang the stream.
+                """
                 import json as _json
-                sent = 0
-                while True:
-                    view = server.router.get_task(task_id)
-                    partial = server.progress.get(task_id, "")
-                    done = view and view.state in (
-                        TaskState.SUCCEEDED, TaskState.FAILED,
-                        TaskState.CANCELLED, TaskState.EXPIRED)
-                    if done and view.state == TaskState.SUCCEEDED and \
-                            view.result and view.result.output:
-                        partial = view.result.output
-                    if len(partial) > sent:
-                        chunk = {
-                            "id": completion_id, "object": "chat.completion.chunk",
-                            "created": created, "model": model_name,
-                            "choices": [{"index": 0, "delta":
-                                         {"content": partial[sent:]},
-                                         "finish_reason": None}]}
-                        yield f"data: {_json.dumps(chunk)}\n\n"
-                        sent = len(partial)
-                    if done:
-                        final = {
-                            "id": completion_id, "object": "chat.completion.chunk",
-                            "created": created, "model": model_name,
-                            "choices": [{"index": 0, "delta": {},
-                                         "finish_reason": "stop"}]}
-                        yield f"data: {_json.dumps(final)}\n\n"
-                        yield "data: [DONE]\n\n"
-                        return
-                    await asyncio.sleep(0.1)
+                key, q = server.events.subscribe(f"task:{task_id}")
+                try:
+                    sent = 0
+                    while True:
+                        view = server.router.get_task(task_id)
+                        partial = server.progress.get(task_id, "")
+                        done = view and view.state in (
+                            TaskState.SUCCEEDED, TaskState.FAILED,
+                            TaskState.CANCELLED, TaskState.EXPIRED)
+                        if done and view.state == TaskState.SUCCEEDED and \
+                                view.result and view.result.output:
+                            partial = view.result.output
+                        if len(partial) > sent:
+                            chunk = {
+                                "id": completion_id,
+                                "object": "chat.completion.chunk",
+                                "created": created, "model": model_name,
+                                "choices": [{"index": 0, "delta":
+                                             {"content": partial[sent:]},
+                                             "finish_reason": None}]}
+                            yield f"data: {_json.dumps(chunk)}\n\n"
+                            sent = len(partial)
+                        if done:
+                            final = {
+                                "id": completion_id,
+                                "object": "chat.completion.chunk",
+                                "created": created, "model": model_name,
+                                "choices": [{"index": 0, "delta": {},
+                                             "finish_reason": "stop"}]}
+                            yield f"data: {_json.dumps(final)}\n\n"
+                            yield "data: [DONE]\n\n"
+                            return
+                        try:
+                            await asyncio.wait_for(q.get(), timeout=0.5)
+                        except asyncio.TimeoutError:
+                            pass  # re-check router state (missed-event guard)
+                finally:
+                    server.events.unsubscribe(key)
             return StreamingResponse(sse(), media_type="text/event-stream")
 
         view = await wait_done()

@@ -129,7 +129,7 @@ main() {
     if ! curl -fsSL --retry 3 --connect-timeout 10 --max-time 120 "$CLIQUE_SERVER/app.tgz" -o "$tmpfile"; then
         err "download failed from $CLIQUE_SERVER/app.tgz (is the server up?)"
     fi
-    if ! head -c 2 "$tmpfile" | od -An -tx1 | grep -q "1f 8b"; then
+    if ! od -An -N2 -tx1 "$tmpfile" | tr -d ' \n' | grep -q "^1f8b"; then
         head -c 300 "$tmpfile" | tr -d '\\0' | head -n 5 || true
         err "app bundle is not gzip (wrong server?)"
     fi
@@ -632,6 +632,10 @@ class SchedulerServer:
             tid = msg["task_id"]
             self.progress[tid] = self.progress.get(tid, "") + msg["text_delta"]
             self.router.mark_running(tid, msg["attempt_id"])
+            await self.events.publish(
+                "task.progress",
+                {"task_id": tid, "delta": msg["text_delta"]},
+                topic=f"task:{tid}")
             view = self.router.get_task(tid)
             if view and view.request.session_id:
                 await self.events.publish(
@@ -672,6 +676,9 @@ class SchedulerServer:
                 await self.events.publish("task.finished", {
                     "task_id": result.task_id, "state": result.state.value,
                     "node_id": node_id})
+                await self.events.publish("task.finished", {
+                    "task_id": result.task_id, "state": result.state.value,
+                    "node_id": node_id}, topic=f"task:{result.task_id}")
             self.registry.set_status(node_id, NodeStatus.READY, current_task_id=None)
             await self._schedule_now()
         elif mtype == protocol.LEAVE:

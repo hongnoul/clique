@@ -188,6 +188,85 @@ class CliqueClient:
                 raise TimeoutError(f"task {task_id} still {view.state.value}")
             await asyncio.sleep(poll_s)
 
+    async def stream_ws(self, task_id: str, timeout_s: float = 600.0):
+        """Yield (delta, done_view) over /ws/tasks/{id}, no polling.
+
+        Push model: server publishes task.progress per agent flush and
+        task.finished on commit. Drops to one HTTP GET per event (to
+        read accumulated partial_output / terminal view), zero traffic
+        while idle. Falls back to stream() polling when the WS drops.
+        Same yield contract as stream().
+        """
+        import json as _json
+
+        import websockets as _ws
+
+        ws_url = self.base_url.replace("http", "ws", 1) + f"/ws/tasks/{task_id}"
+        deadline = asyncio.get_event_loop().time() + timeout_s
+        shown = 0
+        try:
+            async with _ws.connect(ws_url, max_size=None) as sock:
+                while True:
+                    try:
+                        raw = await asyncio.wait_for(
+                            sock.recv(),
+                            timeout=max(0.1, deadline -
+                                        asyncio.get_event_loop().time()))
+                    except asyncio.TimeoutError:
+                        raise TimeoutError(f"task {task_id} timed out on WS")
+                    try:
+                        msg = _json.loads(raw)
+                    except (ValueError, TypeError):
+                        continue
+                    if msg.get("event") == "task.progress":
+                        data = await self.task(task_id)
+                        partial = data.get("partial_output", "") or ""
+                        if len(partial) > shown:
+                            yield partial[shown:], None
+                            shown = len(partial)
+                    elif msg.get("event") == "task.finished":
+                        data = await self.task(task_id)
+                        view = TaskView.model_validate(data)
+                        out = (view.result.output or "") if view.result else ""
+                        if len(out) > shown:
+                            yield out[shown:], None
+                        yield "", view
+                        return
+                    if asyncio.get_event_loop().time() > deadline:
+                        raise TimeoutError(f"task {task_id} timed out on WS")
+        except (OSError, _ws.WebSocketException):
+            async for delta, done in self.stream(task_id, timeout_s=max(
+                    1.0, deadline - asyncio.get_event_loop().time())):
+                yield delta, done
+            return
+        # server closes the socket right after task.finished (or when a
+        # late subscriber asks about an already-terminal task): one final
+        # HTTP settle, then fall back to polling only if still running.
+        data = await self.task(task_id)
+        view = TaskView.model_validate(data)
+        if view.state in (TaskState.SUCCEEDED, TaskState.FAILED,
+                          TaskState.CANCELLED, TaskState.EXPIRED):
+            out = (view.result.output or "") if view.result else ""
+            if len(out) > shown:
+                yield out[shown:], None
+            yield "", view
+            return
+        shown_data = await self.task(task_id)
+        already = len(shown_data.get("partial_output", "") or "")
+        shown = max(shown, already)
+        skip = shown
+        async for delta, done in self.stream(task_id, timeout_s=max(
+                1.0, deadline - asyncio.get_event_loop().time())):
+            # stream() replays from zero; drop what WS already delivered
+            if delta and skip > 0:
+                if len(delta) <= skip:
+                    skip -= len(delta)
+                    delta = ""
+                else:
+                    delta = delta[skip:]
+                    skip = 0
+            yield delta, done
+
     async def cancel(self, task_id: str) -> bool:
         return (await self._post(f"/v1/tasks/{task_id}/cancel"))["cancelled"]
 

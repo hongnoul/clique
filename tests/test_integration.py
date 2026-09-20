@@ -298,3 +298,44 @@ async def test_sdk_stream_yields_deltas_then_done(clique):
     assert done is not None and done.state == _TS.SUCCEEDED
     assert deltas, "stream() yielded no progress deltas"
     assert "".join(deltas) == (done.result.output or "")
+
+
+@pytest.mark.asyncio
+async def test_sdk_stream_ws_push_no_polling(clique):
+    """stream_ws() gets deltas over /ws/tasks/{id} without HTTP polling."""
+    import json as _json
+
+    import websockets as _ws
+
+    from client.sdk import CliqueClient
+    from common.types import TaskState as _TS
+
+    base, _, _ = clique
+    client = CliqueClient(base)
+    # part 1: raw WS sees live progress events mid-flight
+    watch_id = await client.submit("word " * 200, max_output_tokens=200)
+    ws_url = base.replace("http", "ws", 1) + f"/ws/tasks/{watch_id}"
+    events: list[str] = []
+    async with _ws.connect(ws_url) as sock:
+        deadline = asyncio.get_event_loop().time() + 15
+        while asyncio.get_event_loop().time() < deadline:
+            try:
+                raw = await asyncio.wait_for(sock.recv(), timeout=2)
+            except asyncio.TimeoutError:
+                continue
+            events.append(_json.loads(raw)["event"])
+            if "task.finished" in events:
+                break
+    assert "task.progress" in events, f"no progress events: {events[:5]}"
+    # part 2: SDK consumer on a fresh task reassembles the same output
+    task_id = await client.submit("word " * 200, max_output_tokens=200)
+    deltas: list[str] = []
+    done = None
+    async for delta, view in client.stream_ws(task_id, timeout_s=15.0):
+        if delta:
+            deltas.append(delta)
+        if view is not None:
+            done = view
+    assert done is not None and done.state == _TS.SUCCEEDED
+    assert deltas, "stream_ws() yielded no progress deltas"
+    assert "".join(deltas) == (done.result.output or "")

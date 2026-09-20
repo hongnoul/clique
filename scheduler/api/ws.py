@@ -9,6 +9,10 @@ Channels:
                      updates, queue stats ticks.
 - /ws/sessions/{id}  live token stream of one session (multi-viewer:
                      any connected watcher receives every delta).
+- /ws/tasks/{id}     live token stream of one task (multi-viewer):
+                     task.progress deltas as the node generates, plus
+                     task.finished. Backs SDK stream_ws() and keeps
+                     firehose free of per-token flood at 16 slots.
 - /ws/workspace/{id} realtime file collab: patch in, delta out, presence
                      droppable. (routes attached by workspace_routes.)
 """
@@ -68,7 +72,7 @@ class EventBroadcaster:
 
 
 def register_ws_routes(app: "FastAPI", server: "SchedulerServer") -> None:
-    """Attach /ws/events and /ws/sessions/{id}."""
+    """Attach /ws/events, /ws/sessions/{id}, and /ws/tasks/{id}."""
 
     @app.websocket("/ws/events")
     async def events_ws(ws: WebSocket) -> None:
@@ -96,6 +100,39 @@ def register_ws_routes(app: "FastAPI", server: "SchedulerServer") -> None:
             while True:
                 msg = await q.get()
                 await ws.send_text(json.dumps(msg))
+        except (WebSocketDisconnect, RuntimeError):
+            pass
+        finally:
+            server.events.unsubscribe(key)
+
+    @app.websocket("/ws/tasks/{task_id}")
+    async def task_ws(ws: WebSocket, task_id: str) -> None:
+        view = server.router.get_task(task_id)
+        if view is None:
+            await ws.close(code=4404)
+            return
+        await ws.accept()
+        key, q = server.events.subscribe(f"task:{task_id}")
+        try:
+            # replay anything already accumulated (subscriber joined late)
+            # so a watcher never waits on progress that already happened
+            if view.state.value in ("succeeded", "failed", "cancelled",
+                                    "expired"):
+                await ws.send_text(json.dumps({
+                    "event": "task.finished",
+                    "payload": {"task_id": task_id,
+                                "state": view.state.value,
+                                "node_id": view.assigned_node}}))
+                await ws.close(code=1000)
+                return
+            while True:
+                msg = await q.get()
+                await ws.send_text(json.dumps(msg))
+                if msg.get("event") == "task.finished":
+                    # terminal: close so neither side leaks an idle socket
+                    # (the client already has everything it needs)
+                    await ws.close(code=1000)
+                    return
         except (WebSocketDisconnect, RuntimeError):
             pass
         finally:
