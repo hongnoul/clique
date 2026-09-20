@@ -1,6 +1,8 @@
 """Headless CLI (MVP implementation).
 
 Commands:
+  clique                             button home: Host Join Chat Dashboard Logs
+  clique ui [--server URL]           same home screen, explicit
   clique serve [--foreground]        start the server in the background
   clique join [--server URL] ...     join this device as a node, in the background
   clique status                      what's running locally (server/agent), on demand
