@@ -29,6 +29,13 @@ RESULT = "result"
 PROGRESS = "progress"
 LEAVE = "leave"
 SHUTDOWN = "shutdown"
+# workspace realtime collab
+WS_PATCH = "workspace.patch"      # client -> server: line ops
+WS_STATE = "workspace.state"      # server -> client: full file state
+WS_DELTA = "workspace.delta"      # server -> clients/agents: applied ops
+WS_PRESENCE = "workspace.presence"  # cursor/selection, droppable
+WS_SYNC = "workspace.sync"        # client -> server: resync request
+WS_INVALIDATE = "workspace.invalidate"  # server -> agent: context stale
 
 
 def sign_payload(body: bytes, signing_key_hex: str) -> str:
@@ -86,6 +93,41 @@ def msg_leave(reason: str) -> dict[str, Any]:
 
 def msg_shutdown(reason: str) -> dict[str, Any]:
     return {"type": SHUTDOWN, "reason": reason}
+def msg_ws_patch(workspace_id: str, path: str, base_version: int,
+                 ops: list[dict], actor: str) -> dict[str, Any]:
+    return {"type": WS_PATCH, "workspace_id": workspace_id, "path": path,
+            "base_version": base_version, "ops": ops, "actor": actor}
+
+
+def msg_ws_delta(workspace_id: str, path: str, version: int, seq: int,
+                 ops: list[dict], actor: str, rebased: bool = False) -> dict[str, Any]:
+    return {"type": WS_DELTA, "workspace_id": workspace_id, "path": path,
+            "version": version, "seq": seq, "ops": ops,
+            "actor": actor, "rebased": rebased}
+
+
+def msg_ws_state(workspace_id: str, path: str, version: int, seq: int,
+                 text: str) -> dict[str, Any]:
+    return {"type": WS_STATE, "workspace_id": workspace_id, "path": path,
+            "version": version, "seq": seq, "text": text}
+
+
+def msg_ws_presence(workspace_id: str, actor: str, path: str | None = None,
+                    line: int | None = None) -> dict[str, Any]:
+    return {"type": WS_PRESENCE, "workspace_id": workspace_id,
+            "actor": actor, "path": path, "line": line}
+
+
+def msg_ws_sync(workspace_id: str, path: str | None = None,
+                since_seq: int = 0) -> dict[str, Any]:
+    return {"type": WS_SYNC, "workspace_id": workspace_id,
+            "path": path, "since_seq": since_seq}
+
+
+def msg_ws_invalidate(workspace_id: str, seq: int,
+                      paths: list[str]) -> dict[str, Any]:
+    return {"type": WS_INVALIDATE, "workspace_id": workspace_id,
+            "seq": seq, "paths": paths}
 
 
 def dumps(msg: dict[str, Any]) -> str:

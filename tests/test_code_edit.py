@@ -250,3 +250,70 @@ def test_gc_workspaces(tmp_path):
     os.utime(orphan, (old, old))
     assert server.gc_workspaces(older_than_s=3600) == 1
     assert not orphan.exists()
+
+
+TOOL_ROUNDS = [
+    '{"op": "read", "path": "foo.py"}\n',
+    '{"op": "edit", "path": "foo.py", "old": "old", "new": "new"}\n',
+    ('final\n```diff\n--- a/foo.py\n+++ b/foo.py\n@@ -1 +1 @@\n'
+     '-old\n+new\n```\n'),
+]
+
+
+@pytest.mark.asyncio
+async def test_tool_loop_e2e_accepted(code_clique, tmp_path):
+    """Scripted 3-round tool loop produces an accepted patch + ledger.
+
+    Proves the production path: use_tools prompt triggers the executor
+    loop on the node, final diff passes the server harness gate.
+    """
+    base, server = code_clique
+
+    class LoopRuntime:
+        def __init__(self):
+            self.rounds = list(TOOL_ROUNDS)
+
+        async def health(self):
+            return True
+
+        async def infer_stream(self, prompt, max_tokens):
+            assert "TOOLS:" in prompt  # trigger reached the node
+            yield self.rounds.pop(0) if self.rounds else '{"op":"done"}\n'
+
+        async def cancel(self):
+            pass
+
+    from node.agent import NodeAgent
+    from common.config import Config as _Config
+    cfg = _Config()
+    cfg.node.display_name = "tool-node"
+    cfg.node.data_dir = tmp_path / "tool-node"
+    cfg.node.model_runtime = "echo"
+    cfg.node.model_family = "echo"
+    cfg.node.model_parameter_b = 7.0
+    cfg.node.heartbeat_interval_s = 0.2
+    agent = NodeAgent(cfg, base)
+    agent.runtime = LoopRuntime()
+    task = asyncio.create_task(agent.run())
+    try:
+        async with httpx.AsyncClient() as c:
+            r = await c.post(base + "/v1/code/tasks", json={
+                "prompt": "change old to new",
+                "code": {"files": {
+                    "foo.py": "old\n",
+                    "test_foo.py": ("def test_fix():\n"
+                                    "    assert open('foo.py').read() == 'new\\n'\n")},
+                    "test_cmd": ["pytest", "-q", "test_foo.py"],
+                    "use_tools": True},
+            })
+            r.raise_for_status()
+            task_id = r.json()["task_id"]
+        data = await wait_done(base, task_id)
+        assert data["state"] == "succeeded", data
+        assert data["result"]["applied_sha"]
+        ledger = (await httpx.AsyncClient().get(
+            base + "/v1/ledger")).json()
+        assert ledger["accepted_tasks"] >= 1
+    finally:
+        agent._stop.set()
+        task.cancel()

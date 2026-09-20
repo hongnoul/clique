@@ -42,6 +42,7 @@ from common.types import (
     utcnow,
 )
 from scheduler.api.rest import register_extended_routes
+from scheduler.api.workspace_routes import register_workspace_routes
 from scheduler.api.ws import EventBroadcaster, register_ws_routes
 from scheduler.context_store import ContextStore
 from scheduler.cron import CronService
@@ -51,6 +52,7 @@ from scheduler.router import Router
 from scheduler.sessions import SessionManager
 from scheduler.suggestions import SuggestionEngine
 from scheduler.vcs import VcsService
+from scheduler.workspace import WorkspaceService
 
 log = logging.getLogger("clique.server")
 
@@ -105,6 +107,8 @@ class SchedulerServer:
         self.cron = CronService(db, self.router, self.permissions)
         self.suggestions = SuggestionEngine(self.registry, self.router)
         self.vcs = VcsService(config.node.data_dir / "state-repo")
+        self.workspaces = WorkspaceService(
+            config.node.data_dir / "workspaces")
         self.vcs.register("permissions.json", self.permissions.export_state)
         self.vcs.register("cron.json", self.cron.export_state)
         self.vcs.register("sessions.json", self.sessions.export_state)
@@ -383,7 +387,36 @@ class SchedulerServer:
 
         register_extended_routes(app, self)
         register_ws_routes(app, self)
+        register_workspace_routes(app, self)
         return app
+
+    # ------------------------------------------------- workspace realtime
+
+    async def apply_workspace_patch(self, workspace_id: str, path: str,
+                                    base_version: int, ops: list[dict],
+                                    actor: str) -> dict:
+        """Sequenced patch entry: memory apply, broadcast delta, notify agents."""
+        event = await self.workspaces.apply_patch(
+            workspace_id, path, base_version, ops, actor)
+        topic = f"workspace:{workspace_id}"
+        await self.events.publish(
+            "workspace.delta",
+            protocol.msg_ws_delta(
+                workspace_id, path, event["version"], event["seq"],
+                event["ops"], actor, event["rebased"]),
+            topic=topic)
+        # notify running agents: push invalidate over /ws/agent so their
+        # next inference chunk rereads instead of using stale context
+        invalidate = protocol.dumps(protocol.msg_ws_invalidate(
+            workspace_id, event["seq"], [path]))
+        for node_id in self.conns.connected_ids():
+            ws = self.conns.get(node_id)
+            if ws is not None:
+                try:
+                    await ws.send_text(invalidate)
+                except Exception:
+                    pass  # tick loop cleans up dead conns
+        return event
 
     # ------------------------------------------------------------- agent msgs
 
@@ -423,7 +456,7 @@ class SchedulerServer:
                 if view is not None and view.state.value in (
                         "succeeded", "failed", "cancelled", "expired"):
                     self.ledger.record(view)
-                    self._settle_race(view)
+                    await self._settle_race(view)
                 sid = view.request.session_id if view else None
                 if sid and result.state == TaskState.SUCCEEDED and result.output:
                     version = self.contexts.latest_version(sid)
@@ -546,13 +579,13 @@ class SchedulerServer:
 
     # ------------------------------------------------------- race + upkeep
 
-    def _settle_race(self, view) -> None:
-        """Cancel sibling tasks when a race member is accepted.
+    async def _settle_race(self, view) -> None:
+        """Cancel siblings when a race member is accepted, with live revoke.
 
         Race members share an idempotency_key prefix ``race:<id>``.
-        First harness-accepted patch wins; siblings are cancelled and
-        their workspaces cleaned. Fire-and-forget: revokes go out on the
-        next schedule tick via cancel().
+        First harness-accepted patch wins; siblings are cancelled, their
+        workspaces cleaned, and live nodes get a REVOKE over WS so they
+        stop burning inference immediately.
         """
         key = view.request.idempotency_key
         if not key.startswith("race:"):
@@ -568,9 +601,25 @@ class SchedulerServer:
         for tid in members:
             if tid == view.request.task_id:
                 continue
+            sib = self.router.get_task(tid)
+            if sib is None:
+                continue
             if self.router.cancel(tid):
                 self.workspaces.cleanup(tid)
                 self.progress.pop(tid, None)
+                # live revoke: tell the node to cancel now, not on lease
+                if sib.assigned_node and sib.attempt_id:
+                    ws = self.conns.get(sib.assigned_node)
+                    if ws is not None:
+                        with contextlib.suppress(Exception):
+                            await ws.send_text(protocol.dumps(
+                                protocol.msg_revoke(
+                                    tid, sib.attempt_id,
+                                    f"race {race_id} won by "
+                                    f"{view.request.task_id}")))
+                    self.registry.set_status(
+                        sib.assigned_node, NodeStatus.READY,
+                        current_task_id=None)
         del self.race_groups[race_id]
 
     def gc_workspaces(self, older_than_s: float = 3600.0) -> int:
@@ -588,6 +637,24 @@ class SchedulerServer:
             if age > older_than_s:
                 self.workspaces.cleanup(child.name)
                 removed += 1
+        # Drop race groups whose members all reached terminal state.
+        dead_races = []
+        for race_id, members in self.race_groups.items():
+            states = []
+            for tid in members:
+                v = self.router.get_task(tid)
+                states.append(v.state.value if v else "missing")
+            if all(s in ("succeeded", "failed", "cancelled", "expired",
+                         "missing") for s in states):
+                # keep winners visible briefly: only GC when no live member
+                live_member = any(
+                    (self.router.get_task(t) is not None and
+                     self.router.get_task(t).state.value in
+                     ("queued", "assigned", "running")) for t in members)
+                if not live_member:
+                    dead_races.append(race_id)
+        for race_id in dead_races:
+            del self.race_groups[race_id]
         return removed
 
     # ---------------------------------------------------------------- loops

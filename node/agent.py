@@ -39,6 +39,9 @@ class NodeAgent:
         self.token = ""
         self.current_task_id: str | None = None  # legacy: one of the running ids
         self.running: dict[str, asyncio.Task] = {}  # task_id -> job
+        self.current_task_id: str | None = None
+        self.workspace_seq: int = 0  # latest live workspace seq seen
+        self.workspace_paths: list[str] = []  # paths touched since task start
         self._stop = asyncio.Event()
         self._task_job: asyncio.Task | None = None
         self._ws = None
@@ -118,11 +121,17 @@ class NodeAgent:
                 elif msg["type"] == protocol.REVOKE:
                     job = self.running.get(msg["task_id"])
                     if job is not None:
+                        await self.runtime.cancel()
                         job.cancel()
                 elif msg["type"] == protocol.SHUTDOWN:
                     log.info("server is shutting down (%s); disconnecting",
                              msg.get("reason", ""))
                     await self.stop(drain=False, reason=msg.get("reason", "server shutdown"))
+                elif msg["type"] == protocol.WS_INVALIDATE:
+                    # live workspace moved under us: record latest seq so
+                    # the executor can reread before its next chunk
+                    self.workspace_seq = msg.get("seq", 0)
+                    self.workspace_paths = msg.get("paths", [])
         finally:
             hb.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -130,16 +139,11 @@ class NodeAgent:
 
     async def _execute(self, ws, assignment: TaskAssignment, request: TaskRequest) -> None:
         start = time.monotonic()
-        chunks: list[str] = []
         state, error = TaskState.SUCCEEDED, None
+        output = ""
         try:
-            offset = 0
-            async for delta in self.runtime.infer_stream(
-                    request.prompt, request.max_output_tokens):
-                chunks.append(delta)
-                await ws.send(protocol.dumps(protocol.msg_progress(
-                    assignment.task_id, assignment.attempt_id, offset, delta)))
-                offset += 1
+            from node.executor import execute
+            output = await execute(ws, self.runtime, assignment, request)
         except asyncio.CancelledError:
             # abrupt kill: report nothing; the server's lease/heartbeat
             # machinery will requeue this attempt elsewhere
@@ -150,7 +154,6 @@ class NodeAgent:
             state, error = TaskState.FAILED, str(e)
             log.warning("task %s failed: %s", assignment.task_id, e)
         finally:
-            output = "".join(chunks)
             result = TaskResult(
                 task_id=assignment.task_id, attempt_id=assignment.attempt_id,
                 state=state, output=output if state == TaskState.SUCCEEDED else None,

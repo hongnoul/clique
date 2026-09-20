@@ -124,6 +124,7 @@ class CodeTaskSpec(BaseModel):
     test_cmd: list[str] = Field(default_factory=lambda: ["pytest", "-q"])
     timeout_s: int = 60
     patch_budget_kb: int = 100
+    use_tools: bool = False  # node-local tool loop (capable models only)
 
 
 class TaskRequest(BaseModel):

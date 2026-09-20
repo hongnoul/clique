@@ -375,6 +375,12 @@ def code_submit(prompt: str = typer.Option(..., "--prompt", "-p"),
                 test: str = typer.Option("pytest -q", "--test",
                                          help="test command, space-separated"),
                 session: str = typer.Option(None, "--session"),
+                tools: bool = typer.Option(
+                    False, "--tools",
+                    help="node-local tool loop (capable models only)"),
+                race: int = typer.Option(
+                    0, "--race",
+                    help="fan out to N parallel proposals, first accept wins"),
                 server: str = typer.Option(None)) -> None:
     """Submit a CODE_EDIT task from files and wait for verified result."""
     import shlex
@@ -393,23 +399,55 @@ def code_submit(prompt: str = typer.Option(..., "--prompt", "-p"),
     if not files:
         raise typer.BadParameter("give at least one --file or --inline")
 
-    async def run() -> None:
-        task_id = await client.code_submit(
-            prompt, files, test_cmd=shlex.split(test),
-            session_id=session)
-        console.print(f"[dim]code task {task_id} submitted[/]")
+    async def show_result(task_id: str) -> None:
         view = await client.wait(task_id)
         if view.state.value == "succeeded":
             diff = await client.code_diff(task_id)
             console.print("[green]accepted[/]",
-                          f"sha={diff.get('applied_sha')}")
+                          f"{task_id} sha={diff.get('applied_sha')}")
             console.print(diff.get("patch") or "")
         else:
-            console.print(f"[red]{view.state.value}[/]: "
+            console.print(f"[red]{view.state.value}[/] {task_id}: "
                           f"{(view.result.error if view.result else '?')}")
             tests = await client.code_tests(task_id)
             if tests.get("test_report"):
                 console.print(tests["test_report"])
+
+    async def run() -> None:
+        if race > 0:
+            body = await client.code_race(
+                prompt, files, fanout=race, test_cmd=shlex.split(test))
+            console.print(f"[dim]race {body['race_id']}: "
+                          f"{body['task_ids']}[/]")
+            for tid in body["task_ids"]:
+                await show_result(tid)
+            return
+        task_id = await client.code_submit(
+            prompt, files, test_cmd=shlex.split(test),
+            session_id=session, use_tools=tools)
+        console.print(f"[dim]code task {task_id} submitted[/]")
+        await show_result(task_id)
+
+    asyncio.run(run())
+
+
+@app.command()
+def ledger(server: str = typer.Option(None)) -> None:
+    """Accepted-work accounting: totals, per-node earnings, states."""
+    client = _resolve(server)
+
+    async def run() -> None:
+        data = await client.ledger()
+        table = Table(title="ledger (run-rate projection, not payout)")
+        for col in ("node", "terminal", "accepted", "earned"):
+            table.add_column(col)
+        for row in data.get("by_node", []):
+            table.add_row(str(row["node_id"])[:8], str(row["terminal"]),
+                          str(row["accepted"]), f"${row['earned']:.2f}")
+        console.print(table)
+        console.print(f"accepted={data.get('accepted_tasks')} "
+                      f"earned=${data.get('earned_run_rate', 0):.2f} "
+                      f"@ ${data.get('rate_per_task', 0.20):.2f}/task")
 
     asyncio.run(run())
 

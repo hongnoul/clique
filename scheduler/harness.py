@@ -88,8 +88,15 @@ def build_code_prompt(task_prompt: str, spec: CodeTaskSpec,
         "minimal and complete.\n\n"
         f"Task: {task_prompt}\n"
         f"Base: {spec.base_sha or '(fresh snapshot)'}\n"
-        f"Tests: {' '.join(spec.test_cmd)}\n\nFiles:\n"
+        f"Tests: {' '.join(spec.test_cmd)}\n"
     )
+    if spec.use_tools:
+        header += (
+            "TOOLS: you have file tools. Use single-line JSON calls "
+            '({"op":"read"|"edit"|"write"|"bash"|"done"}) to inspect, '
+            "edit, and test locally before emitting the final diff.\n"
+        )
+    header += "\nFiles:\n"
     body_parts: list[str] = []
     used = len(header)
     for path, content in spec.files.items():

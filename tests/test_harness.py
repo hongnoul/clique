@@ -69,6 +69,15 @@ def test_prompt_truncates(tmp_path=None):
     assert "small.py" in prompt or "[truncated]" in prompt
 
 
+def test_prompt_tools_flag():
+    off = harness.build_code_prompt(
+        "fix", CodeTaskSpec(files={"a.py": "x"}))
+    on = harness.build_code_prompt(
+        "fix", CodeTaskSpec(files={"a.py": "x"}, use_tools=True))
+    assert "TOOLS:" not in off
+    assert "TOOLS:" in on
+
+
 def test_workspace_create_apply(tmp_path):
     mgr = WorkspaceManager(tmp_path / "ws")
     spec = CodeTaskSpec(files={"foo.py": "old\n"},

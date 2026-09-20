@@ -106,12 +106,14 @@ class CliqueClient:
     async def code_submit(self, prompt: str, files: dict[str, str],
                           test_cmd: list[str] | None = None,
                           allowed_paths: list[str] | None = None,
+                          use_tools: bool = False,
                           **kw) -> str:
         """Submit a CODE_EDIT task; server verifies the diff before commit."""
         body: dict = {"prompt": prompt,
                       "code": {"files": files,
                                "test_cmd": test_cmd or ["pytest", "-q"],
-                               "allowed_paths": allowed_paths or []}}
+                               "allowed_paths": allowed_paths or [],
+                               "use_tools": use_tools}}
         body.update(kw)
         return (await self._post("/v1/code/tasks", body))["task_id"]
 

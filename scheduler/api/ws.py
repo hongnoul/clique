@@ -9,6 +9,8 @@ Channels:
                      updates, queue stats ticks.
 - /ws/sessions/{id}  live token stream of one session (multi-viewer:
                      any connected watcher receives every delta).
+- /ws/workspace/{id} realtime file collab: patch in, delta out, presence
+                     droppable. (routes attached by workspace_routes.)
 """
 
 from __future__ import annotations
@@ -31,7 +33,7 @@ class EventBroadcaster:
     per-subscriber backpressure: stats ticks are drop-oldest, task state
     transitions and governance events are never dropped."""
 
-    DROPPABLE = {"stats.tick"}
+    DROPPABLE = {"stats.tick", "workspace.presence"}
     QUEUE_CAP = 256
 
     def __init__(self) -> None:
