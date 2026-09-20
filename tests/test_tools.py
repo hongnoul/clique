@@ -81,6 +81,68 @@ async def test_single_shot_passthrough():
 
 
 @pytest.mark.asyncio
+async def test_single_shot_streams_live_chunks():
+    """Long generations flush incrementally, not just once at the end."""
+
+    class ChunkRuntime:
+        async def health(self):
+            return True
+
+        async def infer_stream(self, prompt, max_tokens):
+            for i in range(60):
+                yield f"tok{i} "
+
+        async def cancel(self):
+            pass
+
+    seen: list[str] = []
+    out = await execute(None, ChunkRuntime(), _asgn(), _req("hello"),
+                        progress_cb=seen.append)
+    assert out == "".join(f"tok{i} " for i in range(60))
+    assert "".join(seen) == out  # no progress lost
+    assert len(seen) > 1  # flushed incrementally, not buffered to the end
+    assert len(seen) < 60  # but batched, not one WS msg per token
+    # small outputs keep the old behavior: exactly one callback
+    seen2: list[str] = []
+    out2 = await execute(None, ScriptRuntime(["tiny"]), _asgn(),
+                         _req("hi"), progress_cb=seen2.append)
+    assert out2 == "tiny" and seen2 == ["tiny"]
+
+
+@pytest.mark.asyncio
+async def test_single_shot_streams_over_ws():
+    """Without progress_cb, chunks go over the agent WS as msg_progress."""
+    import json as _json
+
+    class ChunkRuntime:
+        async def health(self):
+            return True
+
+        async def infer_stream(self, prompt, max_tokens):
+            for i in range(60):
+                yield f"tok{i} "
+
+        async def cancel(self):
+            pass
+
+    class FakeWS:
+        def __init__(self):
+            self.sent: list[str] = []
+
+        async def send(self, raw: str):
+            self.sent.append(raw)
+
+    ws = FakeWS()
+    out = await execute(ws, ChunkRuntime(), _asgn(), _req("hello"))
+    assert out.startswith("tok0 ")
+    assert len(ws.sent) > 1
+    first = _json.loads(ws.sent[0])
+    assert first["type"] == "progress" and first["token_offset"] == 0
+    body = "".join(_json.loads(s)["text_delta"] for s in ws.sent)
+    assert body == out
+
+
+@pytest.mark.asyncio
 async def test_tool_loop_edits_then_dones():
     rt = ScriptRuntime([
         '{"op": "read", "path": "foo.py"}\n',
