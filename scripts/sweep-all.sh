@@ -41,8 +41,13 @@ fi
 export PATH="$HOME/.local/bin:$PATH"
 clique --help >/dev/null 2>&1 && ok "clique CLI works" || die "clique CLI broken"
 
-echo "== 2. registry: node ready =="
-clique nodes --server "$S" | grep -q "ready" && ok "inference node ready" || die "no ready node"
+echo "== 2. registry: node ready (retries during post-deploy rejoin) =="
+READY=""
+for i in 1 2 3 4 5 6; do
+  clique nodes --server "$S" 2>/dev/null | grep -q "ready" && READY=1 && break
+  sleep 5
+done
+[ -n "$READY" ] && ok "inference node ready" || die "no ready node after 30s"
 
 echo "== 3. chat inference (stateless) =="
 OUT=$(clique submit "Reply with exactly the word: pineapple" --server "$S" 2>&1)
