@@ -324,3 +324,107 @@ async def test_cli_dash_once(headless_server, capsys):
     )
     assert result.exit_code == 0, result.output
     assert "clique:" in result.output
+
+
+def test_join_forwards_base_url_to_agent(monkeypatch):
+    """`clique join --base-url X --model-name Y` reaches clique-agent argv."""
+    from typer.testing import CliRunner
+
+    import client.cli as _cli
+
+    seen: dict = {}
+
+    def fake_agent_main():
+        import sys as _sys
+        seen["argv"] = list(_sys.argv)
+
+    monkeypatch.setattr("node.agent.main", fake_agent_main)
+    result = CliRunner().invoke(
+        _cli.app,
+        ["join", "--server", "http://x:7777", "--runtime", "openai-compat",
+         "--model-name", "qwen2.5-coder:7b",
+         "--base-url", "http://127.0.0.1:11434/v1",
+         "--param-b", "7", "--parallel-slots", "4"],
+    )
+    assert result.exit_code == 0, result.output
+    argv = seen["argv"]
+    for flag, val in (("--base-url", "http://127.0.0.1:11434/v1"),
+                      ("--model-name", "qwen2.5-coder:7b"),
+                      ("--parallel-slots", "4")):
+        assert flag in argv and argv[argv.index(flag) + 1] == val
+
+
+def test_agent_main_applies_base_url(monkeypatch, tmp_path):
+    """`clique-agent --base-url` lands in config (no network touched)."""
+    import sys as _sys
+
+    import node.agent as _agent
+    from common.config import Config as _Config
+
+    cfg = _Config()
+    cfg.node.data_dir = tmp_path / "agent-data"
+    monkeypatch.setattr(
+        _sys, "argv",
+        ["clique-agent", "--base-url", "http://127.0.0.1:8000/v1",
+         "--model-name", "nemotron-3-nano-fp8", "--server", "http://x:1"])
+    monkeypatch.setattr(_agent, "load", lambda: cfg)
+    monkeypatch.setattr(_agent, "NodeAgent", lambda *a, **k: (_ for _ in ()).throw(
+        SystemExit("stop-before-network")))
+    import pytest as _pt
+    with _pt.raises(SystemExit, match="stop-before-network"):
+        _agent.main()
+    assert cfg.node.openai_base_url == "http://127.0.0.1:8000/v1"
+    assert cfg.node.openai_model_name == "nemotron-3-nano-fp8"
+
+
+async def test_onboard_warns_on_sha_mismatch(headless_server, monkeypatch):
+    """Mismatched server_sha warns but still exits 0 with --dry."""
+    from typer.testing import CliRunner
+
+    import client.cli as _cli
+
+    monkeypatch.setattr(_cli, "_local_sha", lambda: "deadbee")
+    result = await asyncio.to_thread(
+        CliRunner().invoke, _cli.app,
+        ["onboard", "--server", headless_server, "--runtime", "echo",
+         "--dry"],
+    )
+    assert result.exit_code == 0, result.output
+    assert "warn" in result.output
+    assert "server ok" in result.output
+
+
+async def test_onboard_rejects_openai_compat_without_backend(headless_server):
+    """Explicit openai-compat with no base-url/model-name exits 2, no join."""
+    from typer.testing import CliRunner
+
+    import client.cli as _cli
+
+    result = await asyncio.to_thread(
+        CliRunner().invoke, _cli.app,
+        ["onboard", "--server", headless_server,
+         "--runtime", "openai-compat", "--dry"],
+    )
+    assert result.exit_code == 2
+    assert "needs --base-url" in result.output
+
+
+async def test_repo_bundle_roundtrips_through_git(headless_server, tmp_path):
+    """The served bundle is a real git bundle: `git clone` it."""
+    import subprocess
+    import urllib.request as _url
+
+    def _do() -> bytes:
+        with _url.urlopen(headless_server + "/repo.bundle",
+                          timeout=60) as r:
+            return r.read()
+
+    blob = await asyncio.to_thread(_do)
+    bundle = tmp_path / "tcj.bundle"
+    bundle.write_bytes(blob)
+    proc = await asyncio.to_thread(
+        subprocess.run,
+        ["git", "clone", "-q", str(bundle), str(tmp_path / "tclone")],
+        capture_output=True, text=True, timeout=60)
+    assert proc.returncode == 0, proc.stderr
+    assert (tmp_path / "tclone" / "pyproject.toml").exists()
