@@ -374,6 +374,28 @@ class Router:
         self._db.commit()
         return cur.rowcount > 0
 
+    def delete(self, task_id: str) -> bool:
+        """Remove a task row entirely. Returns False if it was missing."""
+        cur = self._db.execute("DELETE FROM tasks WHERE task_id=?", (task_id,))
+        self._db.commit()
+        return cur.rowcount > 0
+
+    def inflight_assignments(self) -> list[tuple[str, str, str]]:
+        """(task_id, attempt_id, assigned_node) for assigned/running tasks."""
+        return self._db.execute(
+            "SELECT task_id, attempt_id, assigned_node FROM tasks"
+            " WHERE state IN ('assigned','running')"
+            " AND assigned_node IS NOT NULL"
+        ).fetchall()
+
+    def clear(self) -> int:
+        """Delete every queued and historical task. Returns how many."""
+        n = self._db.execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
+        self._db.execute("DELETE FROM tasks")
+        self._db.commit()
+        self._seq = 0
+        return n
+
     # -- views ------------------------------------------------------------------
 
     def get_task(self, task_id: str) -> TaskView | None:

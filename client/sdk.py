@@ -391,6 +391,15 @@ class CliqueClient:
     async def close_session(self, session_id: str) -> dict:
         return await self._delete(f"/v1/sessions/{session_id}")
 
+    async def clear_sessions(self) -> dict:
+        return await self._delete("/v1/sessions")
+
+    async def delete_task(self, task_id: str) -> dict:
+        return await self._delete(f"/v1/tasks/{task_id}")
+
+    async def clear_queue(self) -> dict:
+        return await self._delete("/v1/tasks")
+
     # -- admin -----------------------------------------------------------------
 
     async def kick(self, node_id: str) -> dict:
@@ -400,6 +409,10 @@ class CliqueClient:
         """Raises httpx.HTTPStatusError(409) with response.json()["detail"]
         = {"active": [...]} if nodes have active tasks and confirm=False."""
         return await self._post("/v1/server/shutdown", {"confirm": confirm})
+
+    async def clear_data(self) -> dict:
+        """Delete all sessions, queued/historical tasks, and stored data."""
+        return await self._post("/v1/server/clear")
 
     # -- suggestions & vcs -----------------------------------------------------
 

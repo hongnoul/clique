@@ -8,6 +8,7 @@ Commands:
   clique status                      what's running locally (server/agent), on demand
   clique logs {server|join} [-f]     tail a backgrounded process's log
   clique stop / clique leave         gracefully stop the server / disconnect the node
+  clique clear                       wipe sessions, queue, and stored data (nodes stay)
   clique nodes [--server URL]        list nodes and clusters
   clique dash [--server URL] [--full]  live terminal dashboard (polls /dash.txt)
   clique submit PROMPT               chat turn (sticky session by default)
@@ -625,6 +626,24 @@ def kick(node_id: str, server: str = typer.Option(None)) -> None:
     client = _authed(server)
     asyncio.run(client.kick(node_id))
     console.print(f"kicked {node_id}")
+
+
+@app.command()
+def clear(server: str = typer.Option(None),
+          yes: bool = typer.Option(
+              False, "--yes", "-y",
+              help="don't prompt before wiping sessions, queue, and data")) -> None:
+    """Delete all sessions, queued/historical tasks, and stored data.
+    Joined nodes stay; the clique itself is not torn down."""
+    if not (yes or typer.confirm(
+            "Wipe every session, task, and stored workspace on this server?")):
+        console.print("[dim]aborted[/]")
+        raise typer.Exit(0)
+    client = _authed(server)
+    counts = asyncio.run(client.clear_data())
+    client.forget_chat_session()
+    console.print("[green]cleared[/]")
+    console.print(counts)
 
 
 @app.command()

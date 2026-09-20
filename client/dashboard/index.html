@@ -29,9 +29,19 @@
          background: var(--bg); color: var(--fg); margin: 0; padding: 1rem;
          box-sizing: border-box; transition: background .15s, color .15s;
          display: flex; flex-direction: column; }
-  h2 { font-size: .95rem; color: var(--accent); margin: 0 0 .5rem; }
+  h2 { font-size: .95rem; color: var(--accent); margin: 0; }
+  .card > h2 { margin-bottom: .5rem; }
   .card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 0;
           padding: .8rem 1rem; }
+  .card-head { display: flex; align-items: flex-start; justify-content: space-between;
+               gap: .75rem; margin-bottom: .5rem; flex: none; }
+  h2 .sidetitle { color: var(--muted); font-weight: 400; font-size: .7rem; }
+  .empty { color: var(--muted); font-size: .8rem; font-weight: 400; }
+  .clear-btn { background: transparent; border: 1px solid var(--border); color: var(--muted);
+               font: inherit; font-size: .72rem; letter-spacing: .02em; cursor: pointer;
+               padding: .2rem .5rem; white-space: nowrap; flex-shrink: 0; }
+  .clear-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+  .clear-btn:disabled { opacity: .4; cursor: default; }
   table { border-collapse: collapse; width: 100%; font-size: .8rem; }
   th, td { text-align: left; padding: .25rem .5rem; border-bottom: 1px solid var(--border); }
   th { color: var(--accent); }
@@ -40,10 +50,36 @@
   .offline { background: #6e1f1f; } .joining { background: #30363d; }
   .op { color: #8250df; } .owner { color: #bc4c00; }
   .muted { color: var(--muted); }
-  #liveOut { max-height: 16rem; overflow-y: auto; font-size: .78rem;
-             white-space: pre-wrap; word-break: break-word; }
-  tr.live { cursor: pointer; } tr.live:hover td { background: var(--card-bg); }
+  #liveOut { font-size: .8rem; white-space: pre-wrap; word-break: break-word; }
+  tr.live { cursor: pointer; }
+  tr:hover td { background: var(--hover-bg); }
   tr.watching td { background: rgba(63, 185, 80, .12); }
+  th.row-del-col, td.row-del-col { width: 2rem; min-width: 2rem; text-align: center;
+                                   padding-left: .15rem; padding-right: .25rem; }
+  .row-del { opacity: 0; pointer-events: none; background: none; border: 0; color: var(--muted);
+             cursor: pointer; padding: .1rem; line-height: 0; vertical-align: middle; }
+  tr:hover .row-del { opacity: 1; pointer-events: auto; }
+  @media (hover: none) {
+    .row-del { opacity: 1; pointer-events: auto; }
+  }
+  .row-del:hover { color: #f85149; }
+
+  /* confirm dialog */
+  #confirmDlg { position: fixed; inset: 0; z-index: 40; display: flex;
+                align-items: center; justify-content: center; }
+  #confirmDlg[hidden] { display: none; }
+  .dlg-backdrop { position: absolute; inset: 0; background: rgba(0,0,0,.45); }
+  .dlg-card { position: relative; background: var(--card-bg); border: 1px solid var(--border);
+              color: var(--fg); min-width: 280px; max-width: 420px; padding: 1rem 1.1rem;
+              box-shadow: 0 12px 40px rgba(0,0,0,.45); }
+  .dlg-card p { margin: 0 0 1rem; font-size: .85rem; line-height: 1.4; }
+  .dlg-actions { display: flex; justify-content: flex-end; gap: .5rem; }
+  .dlg-actions button { font: inherit; font-size: .78rem; cursor: pointer;
+                        padding: .3rem .7rem; border: 1px solid var(--border);
+                        background: var(--card-bg); color: var(--fg); }
+  .dlg-actions button:hover { border-color: var(--accent); color: var(--accent); }
+  #confirmYes { border-color: #f85149; color: #f85149; }
+  #confirmYes:hover { background: rgba(248,81,73,.12); }
 
   /* header: logo top-left (larger; it already says "clique"), menu top-right */
   header { display: flex; align-items: center; justify-content: space-between;
@@ -87,11 +123,11 @@
   .col-left { display: flex; flex-direction: column; gap: 1rem; min-height: 0; }
   .col-left .card, .col-right, .col-right .card {
     display: flex; flex-direction: column; min-height: 0; flex: 1; }
-  .card > div:last-child { flex: 1; overflow-y: auto; min-height: 0; }
+  .card-scroll { flex: 1; overflow-y: auto; min-height: 0; }
   @media (max-width: 900px) {
     .layout { display: flex; flex-direction: column; height: auto; }
     .col-left, .col-right { flex: none; }
-    .card > div:last-child { max-height: 320px; }
+    .card-scroll { max-height: 320px; }
   }
 
   .medal { font-size: .95rem; font-weight: 700; }
@@ -119,17 +155,38 @@
 
 <div class="layout">
   <div class="col-left">
-    <div class="card"><h2>NODES</h2><div id="nodes"></div></div>
-    <div class="card"><h2>SESSIONS</h2><div id="sessions"></div></div>
-    <div class="card"><h2>LEADERBOARD <span class="muted" style="font-size:.7rem">
-      tasks completed, last 100</span></h2><div id="leaderboard"></div></div>
+    <div class="card"><h2>NODES</h2><div id="nodes" class="card-scroll"></div></div>
+    <div class="card">
+      <div class="card-head">
+        <h2>SESSIONS</h2>
+        <button type="button" id="clearSessions" class="clear-btn" disabled>clear all</button>
+      </div>
+      <div id="sessions" class="card-scroll"></div>
+    </div>
+    <div class="card"><h2>LEADERBOARD <span class="sidetitle">· tasks completed, last 100</span></h2>
+      <div id="leaderboard" class="card-scroll"></div></div>
   </div>
   <div class="col-right">
-    <div class="card"><h2>QUEUE</h2><div id="tasks"></div>
-      <span class="muted" style="font-size:.7rem">click a running task to
-      watch its live output</span></div>
-    <div class="card"><h2>LIVE OUTPUT <span id="liveTask" class="muted"></span></h2>
-      <div id="liveOut"><span class="muted">no task watched</span></div></div>
+    <div class="card">
+      <div class="card-head">
+        <h2>TASK QUEUE</h2>
+        <button type="button" id="clearTasks" class="clear-btn" disabled>clear all</button>
+      </div>
+      <div id="tasks" class="card-scroll"></div>
+    </div>
+    <div class="card"><h2>LIVE OUTPUT <span id="liveTask" class="sidetitle">· click a running task to watch its live output</span></h2>
+      <div id="liveOut" class="card-scroll"><span class="empty">none</span></div></div>
+  </div>
+</div>
+
+<div id="confirmDlg" hidden>
+  <div class="dlg-backdrop"></div>
+  <div class="dlg-card" role="dialog" aria-modal="true" aria-labelledby="confirmMsg">
+    <p id="confirmMsg"></p>
+    <div class="dlg-actions">
+      <button type="button" id="confirmNo">cancel</button>
+      <button type="button" id="confirmYes">delete</button>
+    </div>
   </div>
 </div>
 
@@ -137,8 +194,97 @@
 <script>
 const $ = (id) => document.getElementById(id);
 const j = async (p) => (await fetch(p)).json();
+const TRASH = '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">'
+  + '<path fill="currentColor" d="M6.5 1h3l.5 1H14v1H2V2h4l.5-1zM3 5h10l-.6 9.2A1.5 1.5 0 0 1 10.9 15.5H5.1A1.5 1.5 0 0 1 3.6 14.2L3 5zm3 1.5v7h1v-7H6zm3 0v7h1v-7H9z"/></svg>';
+
+function clusterKey(n) {
+  const m = n.model;
+  if (!m) return '-';
+  if (m.artifact_hash) return `${m.family}:${String(m.artifact_hash).slice(0, 12)}`;
+  const b = m.parameter_count_b;
+  const size = Number.isInteger(b) ? String(b) : String(b);
+  return `${m.family}-${size}b-${m.quantization || 'none'}`;
+}
 
 function badge(s) { return `<span class="badge ${s}">${s}</span>`; }
+
+function fill(id, html) {
+  const el = $(id);
+  const top = el.scrollTop;
+  el.innerHTML = html;
+  el.scrollTop = top;
+}
+
+function delBtn(kind, id) {
+  return `<button type="button" class="row-del" data-del-${kind}="${id}"`
+    + ` aria-label="delete ${kind}">${TRASH}</button>`;
+}
+
+async function apiMutate(path) {
+  const r = await fetch(path, { method: 'POST' });
+  if (!r.ok) {
+    const text = await r.text();
+    throw new Error(`${r.status} ${text}`);
+  }
+  return r.json();
+}
+
+let confirmResolve = null;
+function confirmDlg(message) {
+  return new Promise((resolve) => {
+    if (confirmResolve) confirmResolve(false);
+    confirmResolve = resolve;
+    $('confirmMsg').textContent = message;
+    $('confirmDlg').hidden = false;
+    $('confirmYes').focus();
+  });
+}
+function settleConfirm(ok) {
+  $('confirmDlg').hidden = true;
+  const r = confirmResolve;
+  confirmResolve = null;
+  if (r) r(ok);
+}
+$('confirmYes').onclick = () => settleConfirm(true);
+$('confirmNo').onclick = () => settleConfirm(false);
+$('confirmDlg').querySelector('.dlg-backdrop').onclick = () => settleConfirm(false);
+
+async function onDeleteClick(kind, id) {
+  const msg = kind === 'session'
+    ? `Delete session ${id} from the server? This removes its conversation too.`
+    : `Delete task ${id} from the queue?`;
+  if (!await confirmDlg(msg)) return;
+  try {
+    await apiMutate(kind === 'session'
+      ? `/v1/sessions/${id}/delete`
+      : `/v1/tasks/${id}/delete`);
+  } catch (e) { console.error(e); }
+  refresh();
+}
+
+$('clearSessions').onclick = async () => {
+  if (!await confirmDlg('Delete all sessions and their conversation history?')) return;
+  try {
+    await apiMutate('/v1/sessions/clear');
+  } catch (e) { console.error(e); }
+  refresh();
+};
+$('clearTasks').onclick = async () => {
+  if (!await confirmDlg('Delete every task in the queue?')) return;
+  try {
+    await apiMutate('/v1/tasks/clear');
+  } catch (e) { console.error(e); }
+  refresh();
+};
+
+document.addEventListener('click', (e) => {
+  const sess = e.target.closest('[data-del-session]');
+  if (sess) { e.preventDefault(); onDeleteClick('session', sess.dataset.delSession); return; }
+  const task = e.target.closest('[data-del-task]');
+  if (task) { e.preventDefault(); onDeleteClick('task', task.dataset.delTask); return; }
+  const live = e.target.closest('tr.live');
+  if (live && live.dataset.task) watchTask(live.dataset.task);
+});
 
 function renderLeaderboard(tasks, nodesById) {
   const counts = {};
@@ -147,7 +293,7 @@ function renderLeaderboard(tasks, nodesById) {
     counts[t.assigned_node] = (counts[t.assigned_node] || 0) + 1;
   }
   const ranked = Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 8);
-  if (!ranked.length) return '<span class="muted">no tasks completed yet</span>';
+  if (!ranked.length) return empty('none');
   const rankClasses = ['gold', 'silver', 'bronze'];
   return '<table><tr><th></th><th>node</th><th>tasks</th></tr>' + ranked.map(([nid, count], i) => {
     const node = nodesById[nid];
@@ -160,38 +306,44 @@ function renderLeaderboard(tasks, nodesById) {
 async function refresh() {
   try {
     const [nodes, tasks, sessions] = await Promise.all([
-      j('/v1/nodes'), j('/v1/tasks'), j('/v1/sessions')]);
+      j('/v1/nodes'), j('/v1/tasks?limit=500'), j('/v1/sessions')]);
     const nodesById = {};
     for (const n of nodes) nodesById[n.node_id] = n;
-    $('nodes').innerHTML = '<table><tr><th>name</th><th>status</th><th>op</th>'
-      + '<th>cluster</th><th>task</th></tr>'
-      + nodes.map(n => `<tr><td>${n.display_name}</td><td>${badge(n.status)}</td>`
-        + `<td>${n.model ? n.model.family + '-' + n.model.parameter_count_b + 'b' : '-'}</td>`
-        + `<td>${n.current_task_id ? n.current_task_id.slice(0,10) : '-'}</td></tr>`)
-        .join('') + '</table>';
-    $('tasks').innerHTML = '<table><tr><th>id</th><th>state</th><th>node</th>'
-      + '<th>type</th></tr>'
-      + tasks.slice(0, 12).map((t) => {
-        const id = t.request.task_id;
-        const clickable = (t.state === 'assigned' || t.state === 'running')
-          ? ` class="live${id === watching ? ' watching' : ''}" data-task="${id}"` : '';
-        return `<tr${clickable}><td>${id.slice(0, 10)}</td>`
-          + `<td>${t.state}</td><td>${t.assigned_node ? t.assigned_node.slice(0, 8) : '-'}</td>`
-          + `<td>${t.request.task_type}</td></tr>`;
-      }).join('') + '</table>';
-    document.querySelectorAll('tr.live').forEach((tr) => {
-      tr.onclick = () => watchTask(tr.dataset.task);
-    });
+    fill('nodes', nodes.length
+      ? '<table><tr><th>name</th><th>status</th><th>cluster</th><th>task</th></tr>'
+        + nodes.map(n => `<tr><td>${n.display_name}</td><td>${badge(n.status)}</td>`
+          + `<td>${clusterKey(n)}</td>`
+          + `<td>${n.current_task_id ? n.current_task_id.slice(0,10) : '-'}</td></tr>`)
+          .join('') + '</table>'
+      : empty('none'));
+    fill('tasks', tasks.length
+      ? '<table><tr><th>id</th><th>state</th><th>node</th><th>type</th>'
+        + '<th class="row-del-col"></th></tr>'
+        + tasks.map((t) => {
+          const id = t.request.task_id;
+          const clickable = (t.state === 'assigned' || t.state === 'running')
+            ? ` class="live${id === watching ? ' watching' : ''}" data-task="${id}"` : '';
+          return `<tr${clickable}><td>${id.slice(0, 10)}</td>`
+            + `<td>${t.state}</td><td>${t.assigned_node ? t.assigned_node.slice(0, 8) : '-'}</td>`
+            + `<td>${t.request.task_type}</td>`
+            + `<td class="row-del-col">${delBtn('task', id)}</td></tr>`;
+        }).join('') + '</table>'
+      : empty('none'));
     if (watching && !tasks.some((t) => t.request.task_id === watching)) {
       stopWatch(' (done)');
     }
-    $('sessions').innerHTML = sessions.length
-      ? '<table><tr><th>id</th><th>cluster</th><th>pinned</th><th>v</th></tr>'
+    fill('sessions', sessions.length
+      ? '<table><tr><th>id</th><th>cluster</th><th>pinned</th><th>v</th>'
+        + '<th class="row-del-col"></th></tr>'
         + sessions.map(s => `<tr><td>${s.session_id}</td><td>${s.cluster_key || '-'}</td>`
           + `<td>${s.pinned_node ? s.pinned_node.slice(0,8) : '-'}</td>`
-          + `<td>${s.context_version}</td></tr>`).join('') + '</table>'
-      : '<span class="muted">none active</span>';
-    $('leaderboard').innerHTML = renderLeaderboard(tasks, nodesById);
+          + `<td>${s.context_version}</td>`
+          + `<td class="row-del-col">${delBtn('session', s.session_id)}</td></tr>`
+        ).join('') + '</table>'
+      : empty('none'));
+    fill('leaderboard', renderLeaderboard(tasks, nodesById));
+    $('clearSessions').disabled = !sessions.length;
+    $('clearTasks').disabled = !tasks.length;
   } catch (e) { console.error(e); }
 }
 
@@ -268,7 +420,12 @@ menuBtn.addEventListener('click', (e) => {
 document.addEventListener('click', (e) => {
   if (!menuPanel.hidden && !menuPanel.contains(e.target) && e.target !== menuBtn) setMenu(false);
 });
-document.addEventListener('keydown', (e) => { if (e.key === 'Escape') setMenu(false); });
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    if (!$('confirmDlg').hidden) settleConfirm(false);
+    setMenu(false);
+  }
+});
 
 // --- logo + theme icon: inlined (not <img>) so they can use currentColor
 // and pick up --fg automatically as the theme changes ---

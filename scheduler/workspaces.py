@@ -221,3 +221,12 @@ class WorkspaceManager:
 
     def cleanup(self, task_id: str) -> None:
         shutil.rmtree(self.path_for(task_id), ignore_errors=True)
+
+    def clear(self) -> int:
+        """Remove every ephemeral task workspace. Returns how many dirs."""
+        removed = 0
+        for child in list(self.base_dir.iterdir()):
+            if child.is_dir():
+                shutil.rmtree(child, ignore_errors=True)
+                removed += 1
+        return removed
