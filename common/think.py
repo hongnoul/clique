@@ -131,10 +131,11 @@ class StreamSplitter:
             # reclassify wholesale as content
             self._mode = "content"
             return "", self._emit_content(text)
-        # already streamed as reasoning; emit the full text as content
-        # too so the transcript keeps a real answer (rare fallback)
-        return self._emit_reasoning(self._strip_open(text)), \
-            self._emit_content(text)
+        # Already streamed as reasoning and the close tag never came:
+        # the generation was cut mid-reasoning (max_tokens). Keep
+        # content empty; duplicating CoT into content would reintroduce
+        # exactly the leak this module exists to prevent.
+        return self._emit_reasoning(self._strip_open(text)), ""
 
     # ------------------------------------------------------------- internals
 

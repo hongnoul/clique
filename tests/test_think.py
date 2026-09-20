@@ -113,6 +113,16 @@ def test_stream_reasoning_hint_truncated_think():
     assert c == ""
 
 
+def test_stream_truncated_by_max_tokens_no_cot_duplication():
+    # Reasoning streamed (family hint, no tags), then generation was
+    # cut by max_tokens before </think>: content must stay empty
+    # instead of duplicating the whole CoT (live gx10 regression).
+    text = "long deliberation that hits the token limit mid-thought"
+    r, c = drive(StreamSplitter(), text, family="nemotron")
+    assert r == text
+    assert c == ""
+
+
 def test_stream_content_never_contains_close_tag():
     text = "reasoning body</think>clean answer"
     r, c = drive(StreamSplitter(), text, family="qwen3-30b", step=3)
