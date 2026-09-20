@@ -52,11 +52,13 @@ CREATE INDEX IF NOT EXISTS idx_tasks_state ON tasks(state);
 class Router:
     def __init__(self, registry, db_path: Path | str, *,
                  lease_seconds: float = 120.0, max_attempts: int = 3,
-                 queue_cap: int = 1000, sessions=None, contexts=None) -> None:
+                 queue_cap: int = 1000, sessions=None, contexts=None,
+                 code_lease_seconds: float = 600.0) -> None:
         self.registry = registry
         self.sessions = sessions
         self.contexts = contexts
         self.lease_seconds = lease_seconds
+        self.code_lease_seconds = code_lease_seconds
         self.max_attempts = max_attempts
         self.queue_cap = queue_cap
         self._db = sqlite3.connect(str(db_path))
@@ -236,7 +238,11 @@ class Router:
             if best_score <= -1e9:
                 continue  # no eligible node for this task; try next task
             attempt_id = f"a-{uuid.uuid4().hex[:10]}"
-            lease = utcnow() + timedelta(seconds=self.lease_seconds)
+            from common.types import TaskType as _TaskType
+            lease_s = (self.code_lease_seconds
+                       if request.task_type == _TaskType.CODE_EDIT
+                       else self.lease_seconds)
+            lease = utcnow() + timedelta(seconds=lease_s)
             self._db.execute(
                 "UPDATE tasks SET state='assigned', assigned_node=?, attempt_id=?,"
                 " lease_expires_at=?, attempts=attempts+1 WHERE task_id=?",

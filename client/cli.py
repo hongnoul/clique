@@ -366,6 +366,55 @@ def submit(prompt: str,
 
 
 @app.command()
+def code_submit(prompt: str = typer.Option(..., "--prompt", "-p"),
+                file: list[str] = typer.Option(
+                    None, "--file", "-f",
+                    help="path=localfile, repeatable (path is repo-relative)"),
+                inline: list[str] = typer.Option(
+                    None, "--inline", help="path:content, repeatable"),
+                test: str = typer.Option("pytest -q", "--test",
+                                         help="test command, space-separated"),
+                session: str = typer.Option(None, "--session"),
+                server: str = typer.Option(None)) -> None:
+    """Submit a CODE_EDIT task from files and wait for verified result."""
+    import shlex
+    client = _resolve(server)
+    files: dict[str, str] = {}
+    for spec in (file or []):
+        repo_path, _, local = spec.partition("=")
+        if not repo_path or not local:
+            raise typer.BadParameter("--file needs path=localfile")
+        files[repo_path] = open(local).read()
+    for spec in (inline or []):
+        repo_path, _, content = spec.partition(":")
+        if not repo_path:
+            raise typer.BadParameter("--inline needs path:content")
+        files[repo_path] = content.replace("\\n", "\n")
+    if not files:
+        raise typer.BadParameter("give at least one --file or --inline")
+
+    async def run() -> None:
+        task_id = await client.code_submit(
+            prompt, files, test_cmd=shlex.split(test),
+            session_id=session)
+        console.print(f"[dim]code task {task_id} submitted[/]")
+        view = await client.wait(task_id)
+        if view.state.value == "succeeded":
+            diff = await client.code_diff(task_id)
+            console.print("[green]accepted[/]",
+                          f"sha={diff.get('applied_sha')}")
+            console.print(diff.get("patch") or "")
+        else:
+            console.print(f"[red]{view.state.value}[/]: "
+                          f"{(view.result.error if view.result else '?')}")
+            tests = await client.code_tests(task_id)
+            if tests.get("test_report"):
+                console.print(tests["test_report"])
+
+    asyncio.run(run())
+
+
+@app.command()
 def task(task_id: str, server: str = typer.Option(None),
          cancel: bool = typer.Option(False, "--cancel")) -> None:
     """Inspect or cancel a task."""

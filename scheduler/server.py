@@ -110,6 +110,13 @@ class SchedulerServer:
         self.vcs.register("sessions.json", self.sessions.export_state)
         self.vcs.register("nodes.json", self._export_nodes)
         self.vcs.init()
+        # code-edit: canonical user-code repo + ephemeral workspaces.
+        # Separate from state-repo (server audit history).
+        from scheduler.workspaces import WorkspaceManager
+        self.code_vcs = VcsService(config.node.data_dir / "code-repo")
+        self.code_vcs.init()
+        self.workspaces = WorkspaceManager(
+            config.node.data_dir / "workspaces")
         self.permissions.on_change(
             lambda action, actor, target: self.vcs.snapshot(
                 f"{action} {target or ''} by {actor[:8]}", actor))
@@ -126,6 +133,14 @@ class SchedulerServer:
 
     async def submit_task(self, request: TaskRequest) -> str:
         """Submit + immediate scheduling; shared by REST routes."""
+        from common.types import TaskType as _TaskType
+        raw_code_prompt = request.prompt  # pre-prompt-build, for session log
+        if request.task_type == _TaskType.CODE_EDIT and request.code is not None:
+            from scheduler.harness import build_code_prompt
+            if not request.prompt:
+                raise HTTPException(422, "prompt required for code tasks")
+            request.prompt = build_code_prompt(request.prompt, request.code)
+            request.max_output_tokens = max(request.max_output_tokens, 2048)
         if request.session_id:
             try:
                 session = self.sessions.get(request.session_id)
@@ -133,8 +148,8 @@ class SchedulerServer:
                 raise HTTPException(404, "no such session")
             version = self.contexts.latest_version(request.session_id)
             self.sessions.append_turn(
-                request.session_id, version, "user", request.prompt)
-            if session.cluster_key:
+                request.session_id, version, "user", raw_code_prompt)
+            if not request.model_hint and session.cluster_key:
                 request.model_hint = session.cluster_key
         try:
             task_id = self.router.submit(request)
@@ -223,6 +238,8 @@ class SchedulerServer:
             if view is None:
                 raise HTTPException(404, "no such task")
             cancelled = self.router.cancel(task_id)
+            if cancelled:
+                self.workspaces.cleanup(task_id)
             if cancelled and view.assigned_node:
                 ws = self.conns.get(view.assigned_node)
                 if ws is not None:
@@ -389,6 +406,7 @@ class SchedulerServer:
                     topic=f"session:{view.request.session_id}")
         elif mtype == protocol.RESULT:
             result = TaskResult.model_validate(msg["result"])
+            result = await self._verify_code_result(result)
             try:
                 committed = self.router.on_result(result)
             except Exception as e:  # stale attempt etc.
@@ -442,6 +460,80 @@ class SchedulerServer:
                 await ws.send_text(protocol.dumps(protocol.msg_shutdown(reason)))
         await asyncio.sleep(0.5)  # let SHUTDOWN frames flush before we go down
         os.kill(os.getpid(), signal.SIGTERM)
+
+    # ------------------------------------------------------- code-edit verify
+
+    async def _verify_code_result(self, result: TaskResult) -> TaskResult:
+        """Server-side harness gate for CODE_EDIT tasks.
+
+        Extracts the fenced diff from raw node output, applies it in an
+        ephemeral workspace seeded from the task spec, runs the allowlisted
+        test command, and on success records patch/test_report/applied_sha.
+        On any failure the result is rewritten to FAILED with a
+        machine-readable error prefix so router retry still applies.
+        Non-code tasks pass through untouched.
+        """
+        from common.types import TaskType as _TaskType
+        view = self.router.get_task(result.task_id)
+        if view is None or view.request.task_type != _TaskType.CODE_EDIT:
+            return result
+        if view.request.code is None or result.state != TaskState.SUCCEEDED:
+            return result
+        spec = view.request.code
+        node_id = view.assigned_node or "server"
+
+        def fail(prefix: str) -> TaskResult:
+            self.workspaces.cleanup(result.task_id)
+            return TaskResult(
+                task_id=result.task_id, attempt_id=result.attempt_id,
+                state=TaskState.FAILED, output=result.output,
+                error=prefix, prompt_tokens=result.prompt_tokens,
+                output_tokens=result.output_tokens,
+                wall_time_s=result.wall_time_s)
+
+        from scheduler import harness as _h
+        try:
+            diff = _h.extract_diff(result.output or "")
+            _h.validate_diff(diff, spec)
+        except Exception as e:
+            return fail(str(e))
+        try:
+            self.workspaces.create(result.task_id, spec)
+            self.workspaces.apply_patch(result.task_id, diff)
+            report = self.workspaces.run_tests(result.task_id, spec)
+        except Exception as e:
+            return fail(str(e))
+        # Publish verified files into code-repo working tree, then commit.
+        # Collect every file in the verified workspace (seed + patch adds).
+        # Skip test-run artifacts (__pycache__, .pytest_cache, .pyc).
+        ws_root = self.workspaces.path_for(result.task_id)
+        rels: list[str] = []
+        for p in sorted(ws_root.rglob("*")):
+            if not p.is_file() or p.name == ".harness.patch":
+                continue
+            rel = str(p.relative_to(ws_root))
+            parts = rel.split("/")
+            if parts[0] in ("__pycache__", ".pytest_cache", ".hypothesis"):
+                continue
+            if p.suffix in (".pyc", ".pyo"):
+                continue
+            try:
+                text = p.read_text()
+            except UnicodeDecodeError:
+                continue  # binary artifact, not source
+            dst = self.code_vcs.repo_dir / result.task_id / rel
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            dst.write_text(text)
+            rels.append(f"{result.task_id}/{rel}")
+        sha = self.code_vcs.commit_paths(
+            rels, f"code task {result.task_id} accepted", node_id)
+        if sha is None:
+            return fail("commit_empty: no changes staged")
+        self.workspaces.cleanup(result.task_id)
+        result.patch = diff
+        result.test_report = report
+        result.applied_sha = sha
+        return result
 
     # ---------------------------------------------------------------- loops
 

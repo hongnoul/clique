@@ -102,7 +102,12 @@ def render_lines(snap: dict, width: int = 100,
             tid = str(req.get("task_id", "?"))[:12]
             state = str(t.get("state", "?"))[:10].ljust(10)
             node = str(t.get("assigned_node") or "-")[:8]
-            L.append(f"  {tid} {state} {node} {prompt}")
+            ttype = str(req.get("task_type", ""))[:4]
+            tag = f"[{ttype}]" if ttype in ("code",) else ""
+            res = t.get("result") or {} if isinstance(t, dict) else {}
+            sha = str(res.get("applied_sha") or "")[:7]
+            shatag = f" @{sha}" if sha else ""
+            L.append(f"  {tid} {state} {node} {tag}{shatag} {prompt}")
     elif isinstance(tasks, dict) and tasks.get("_error"):
         L.append(f"TASKS: {tasks['_error']}")
     else:

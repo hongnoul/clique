@@ -103,6 +103,24 @@ class CliqueClient:
     async def cancel(self, task_id: str) -> bool:
         return (await self._post(f"/v1/tasks/{task_id}/cancel"))["cancelled"]
 
+    async def code_submit(self, prompt: str, files: dict[str, str],
+                          test_cmd: list[str] | None = None,
+                          allowed_paths: list[str] | None = None,
+                          **kw) -> str:
+        """Submit a CODE_EDIT task; server verifies the diff before commit."""
+        body: dict = {"prompt": prompt,
+                      "code": {"files": files,
+                               "test_cmd": test_cmd or ["pytest", "-q"],
+                               "allowed_paths": allowed_paths or []}}
+        body.update(kw)
+        return (await self._post("/v1/code/tasks", body))["task_id"]
+
+    async def code_diff(self, task_id: str) -> dict:
+        return await self._get(f"/v1/code/tasks/{task_id}/diff")
+
+    async def code_tests(self, task_id: str) -> dict:
+        return await self._get(f"/v1/code/tasks/{task_id}/tests")
+
     # -- clique views ----------------------------------------------------------
 
     async def nodes(self) -> list[NodeInfo]:

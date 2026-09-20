@@ -51,6 +51,7 @@ class TaskState(str, enum.Enum):
 class TaskType(str, enum.Enum):
     CHAT = "chat"
     CODE_GENERATION = "code_generation"
+    CODE_EDIT = "code_edit"
     SUMMARIZATION = "summarization"
     EMBEDDING = "embedding"
     OTHER = "other"
@@ -109,6 +110,22 @@ class Cluster(BaseModel):
     node_ids: list[str]
 
 
+class CodeTaskSpec(BaseModel):
+    """File snapshot + verification contract for CODE_EDIT tasks.
+
+    MVP input is a file dict, not a URL. Server builds the prompt,
+    the node returns raw text with one fenced unified diff, and the
+    server harness applies + test-verifies before commit.
+    """
+
+    base_sha: str = ""
+    files: dict[str, str] = Field(default_factory=dict)
+    allowed_paths: list[str] = Field(default_factory=list)  # empty = all writable
+    test_cmd: list[str] = Field(default_factory=lambda: ["pytest", "-q"])
+    timeout_s: int = 60
+    patch_budget_kb: int = 100
+
+
 class TaskRequest(BaseModel):
     task_id: str = ""
     submitted_by_node: str = ""
@@ -119,6 +136,7 @@ class TaskRequest(BaseModel):
     max_output_tokens: int = 1024
     idempotency_key: str
     created_at: datetime = Field(default_factory=utcnow)
+    code: CodeTaskSpec | None = None
 
     def est_prompt_tokens(self, text: str | None = None) -> int:
         src = self.prompt if text is None else text
@@ -142,6 +160,9 @@ class TaskResult(BaseModel):
     prompt_tokens: int | None = None
     output_tokens: int | None = None
     wall_time_s: float | None = None
+    patch: str | None = None  # extracted unified diff (CODE_EDIT)
+    test_report: dict | None = None  # harness test outcome
+    applied_sha: str | None = None  # code-repo commit on accept
 
 
 class TaskView(BaseModel):

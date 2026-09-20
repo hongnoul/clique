@@ -387,6 +387,47 @@ def register_extended_routes(app: "FastAPI", server: "SchedulerServer") -> None:
                                 (view.result.output_tokens or 0)},
         }
 
+    # ------------------------------------------------------------ code tasks
+
+    @app.post("/v1/code/tasks")
+    async def code_submit(body: dict) -> dict:
+        """Submit a CODE_EDIT task: {prompt, code: CodeTaskSpec, ...}.
+
+        Server builds the diff-request prompt, creates the workspace on
+        assignment via submit_task, and verifies node output before commit.
+        """
+        from common.types import CodeTaskSpec, TaskType
+        body = dict(body)
+        body["task_type"] = TaskType.CODE_EDIT.value
+        if "idempotency_key" not in body:
+            body["idempotency_key"] = uuid.uuid4().hex
+        request = TaskRequest.model_validate(body)
+        if request.code is None:
+            raise HTTPException(422, "code spec required")
+        CodeTaskSpec.model_validate(request.code.model_dump())
+        return {"task_id": await server.submit_task(request)}
+
+    @app.get("/v1/code/tasks/{task_id}/diff")
+    async def code_diff(task_id: str) -> dict:
+        view = server.router.get_task(task_id)
+        if view is None:
+            raise HTTPException(404, "no such task")
+        result = view.result
+        return {"task_id": task_id,
+                "patch": result.patch if result else None,
+                "applied_sha": result.applied_sha if result else None,
+                "partial_output": server.progress.get(task_id, "")}
+
+    @app.get("/v1/code/tasks/{task_id}/tests")
+    async def code_tests(task_id: str) -> dict:
+        view = server.router.get_task(task_id)
+        if view is None:
+            raise HTTPException(404, "no such task")
+        result = view.result
+        return {"task_id": task_id,
+                "test_report": result.test_report if result else None,
+                "state": view.state.value}
+
     # ------------------------------------------------------------ model mirror
 
     @app.get("/models/{artifact}")

@@ -87,6 +87,31 @@ class VcsService:
             committer=b"clique-server <server@clique>")
         return sha.decode() if isinstance(sha, bytes) else str(sha)
 
+    def commit_paths(self, rel_paths: list[str], message: str,
+                       actor: str) -> str | None:
+        """Stage explicit repo-relative paths and commit.
+
+        For callers (code-repo) whose files are not registered exporters.
+        Returns sha, or None when the tree is unchanged.
+        """
+        assert self._repo is not None, "call init() first"
+        abs_paths = [str(self.repo_dir / p) for p in rel_paths
+                     if (self.repo_dir / p).exists()]
+        if not abs_paths:
+            return None
+        porcelain.add(self._repo, abs_paths)
+        # Skip no-op commits: dulwich commits unconditionally, so check
+        # worktree status first (staged or unstaged changes anywhere).
+        st = porcelain.status(self._repo)
+        if not any([st.staged["add"], st.staged["delete"],
+                    st.staged["modify"], st.unstaged]) and self._has_head():
+            return None
+        sha = porcelain.commit(
+            self._repo, message=message.encode(),
+            author=f"{actor} <{actor}@clique>".encode(),
+            committer=b"clique-server <server@clique>")
+        return sha.decode() if isinstance(sha, bytes) else str(sha)
+
     def _has_head(self) -> bool:
         try:
             self._repo.head()
@@ -103,10 +128,16 @@ class VcsService:
         walker = self._repo.get_walker(max_entries=limit)
         for entry in walker:
             c = entry.commit
+            try:
+                actor = c.author.decode().split(" <")[0]
+                message = c.message.decode().strip()
+            except UnicodeDecodeError:
+                actor = c.author.decode("utf-8", "replace").split(" <")[0]
+                message = c.message.decode("utf-8", "replace").strip()
             out.append({
                 "sha": c.id.decode(),
-                "actor": c.author.decode().split(" <")[0],
-                "message": c.message.decode().strip(),
+                "actor": actor,
+                "message": message,
                 "timestamp": datetime.fromtimestamp(
                     c.author_time, tz=timezone.utc).isoformat(),
             })
@@ -117,7 +148,11 @@ class VcsService:
         tree = self._repo[commit.tree]
         files = {}
         for name, _mode, blob_sha in tree.iteritems():
-            files[name.decode()] = self._repo[blob_sha].data.decode()
+            try:
+                data = self._repo[blob_sha].data.decode()
+            except UnicodeDecodeError:
+                data = self._repo[blob_sha].data.decode("utf-8", "replace")
+            files[name.decode()] = data
         return files
 
     def diff(self, sha_a: str, sha_b: str) -> str:
