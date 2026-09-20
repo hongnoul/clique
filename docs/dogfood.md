@@ -53,12 +53,12 @@ Each wave gates on: node visible in `clique nodes`, 1 task succeeds end-to-end,
 ## Onboarding flow (per machine)
 
 ```bash
-# 0. tailscale up + reachable?
-curl -s http://100.83.233.124:7777/   # should print the join menu
+# 0. reachable? (tailnet URL needs tailscale; the public URL needs nothing)
+curl -s --connect-timeout 5 http://100.83.233.124:7777/   # prints the join menu + public_url
 
-# 1. install (no GitHub, no PAT, no ssh key)
-export CLIQUE_SERVER=http://100.83.233.124:7777
-curl -fsSL $CLIQUE_SERVER/join.sh | sh
+# 1. install (no GitHub, no PAT, no ssh key, no tailscale if using public_url)
+export CLIQUE_SERVER=http://100.83.233.124:7777   # or the trycloudflare public_url from step 0
+curl -fsSL --connect-timeout 5 $CLIQUE_SERVER/join.sh | sh
 export PATH="$HOME/.local/bin:$PATH"
 
 # 2. one step: buttons, no scripts

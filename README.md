@@ -117,9 +117,9 @@ registration (node keypair -> bearer token), handled silently by the
 CLI. SSH/Tailscale is only hidden transport for headless boxes.
 
 ```bash
-export CLIQUE=http://<server-ip>:7777
+export CLIQUE=http://<server-ip>:7777   # or the public https URL (see below)
 curl -s $CLIQUE/               # prints the one-line join
-curl -fsSL $CLIQUE/join.sh | sh   # install, server preconfigured
+curl -fsSL --connect-timeout 5 $CLIQUE/join.sh | sh   # install, server preconfigured
 
 # without installing anything (stdlib-only live TUI):
 curl -fsSL $CLIQUE/tui.py | python3 - --server $CLIQUE
@@ -134,6 +134,27 @@ clique join --runtime echo --param-b 7
 
 # headless box over ssh (transport hidden, same join bundle):
 clique join-remote gx10
+```
+
+### Anywhere: public URL, zero assumptions
+
+For joiners outside your LAN/tailnet (no VPN, no tailscale, no
+account), run a quick tunnel next to the server and share the https
+URL it prints:
+
+```bash
+# on the server box (no account, no sudo):
+cloudflared tunnel --url http://127.0.0.1:7777
+# -> https://<random>.trycloudflare.com
+```
+
+Write that URL to `~/.clique/public_url` (a `clique-tunnel.service`
+user unit can own this) or set `$CLIQUE_PUBLIC_URL`, and the server
+advertises it in `/` and `/v1/clique` as `public_url`. Nodes only dial
+outbound, so the tunnel is all a stranger needs:
+
+```bash
+curl -fsSL --connect-timeout 5 https://<random>.trycloudflare.com/join.sh | sh
 ```
 
 `clique` opens the button home (Host, Join, Chat, Dashboard, Stop,

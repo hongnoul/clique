@@ -811,7 +811,7 @@ def join_remote(host: str = typer.Argument(..., help="ssh target, e.g. gx10 or u
     cmd = ["ssh"]
     for o in (ssh_opt or []):
         cmd += ["-o", o]
-    cmd += [host, f"curl -fsSL {srv}/join.sh | sh"]
+    cmd += [host, f"curl -fsSL --connect-timeout 5 {srv}/join.sh | sh"]
     console.print(f"[dim]joining {host} via hidden ssh transport...[/]")
     rc = _sp.call(cmd)
     if rc != 0:

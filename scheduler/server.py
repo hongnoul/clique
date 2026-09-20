@@ -74,6 +74,27 @@ def _server_sha() -> str:
     return "unknown"
 
 
+def _public_url() -> str | None:
+    """Public HTTPS URL of this server, when a tunnel is up.
+
+    True zero-context onboarding: a joiner needs no tailscale, no VPN,
+    no LAN, no account. Sources, first hit wins:
+      1. $CLIQUE_PUBLIC_URL (explicit, e.g. a named domain)
+      2. ~/.clique/public_url (written by the tunnel unit, e.g.
+         cloudflared quick tunnel: clique-tunnel.service)
+    """
+    import os
+    from pathlib import Path
+    url = os.environ.get("CLIQUE_PUBLIC_URL", "").strip()
+    if url:
+        return url.rstrip("/")
+    with contextlib.suppress(Exception):
+        text = (Path.home() / ".clique" / "public_url").read_text().strip()
+        if text.startswith("http"):
+            return text.rstrip("/")
+    return None
+
+
 _JOIN_SH_TEMPLATE = """#!/bin/sh
 # clique join: one line, no token, no GitHub, no ssh key.
 #   curl -fsSL __CLIQUE_SERVER__/join.sh | sh
@@ -432,7 +453,8 @@ class SchedulerServer:
                     "clusters": [c.model_dump(mode="json")
                                  for c in self.registry.list_clusters()],
                     "protocol_version": protocol.PROTOCOL_VERSION,
-                    "server_sha": _server_sha()}
+                    "server_sha": _server_sha(),
+                    "public_url": _public_url()}
 
         @app.get("/v1/stats")
         async def stats() -> dict:
@@ -448,9 +470,14 @@ class SchedulerServer:
         @app.get("/", response_class=PlainTextResponse)
         async def index_txt(request: Request) -> str:
             base = str(request.base_url).rstrip("/")
+            pub = _public_url()
+            alt = (f"anywhere (no VPN, no LAN):\n"
+                   f"  curl -fsSL --connect-timeout 5 {pub}/join.sh | sh\n"
+                   if pub and pub != base else "")
             return (
                 f"join this clique (one line, no token needed):\n"
-                f"  curl -fsSL {base}/join.sh | sh\n"
+                f"  curl -fsSL --connect-timeout 5 {base}/join.sh | sh\n"
+                f"{alt}"
                 f"then one step (buttons, no scripts):\n"
                 f"  export CLIQUE_SERVER={base}\n"
                 f"  clique              # Host Join Chat Dashboard buttons\n"
