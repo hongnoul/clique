@@ -9,7 +9,7 @@ FastAPI app exposing:
 - GET  /v1/tasks              list
 - GET  /v1/nodes, /v1/clusters, /v1/clique, /v1/stats
 - extended surface (scheduler/api/rest.py): sessions, suggestions,
-  vcs, kick, /v1/chat/completions, /dash
+  vcs, kick, /v1/server/clear, /v1/chat/completions, /dash
 - WS firehose (scheduler/api/ws.py): /ws/events, /ws/sessions/{id}
 
 A background loop schedules queued tasks onto ready agent connections,
@@ -515,9 +515,31 @@ class SchedulerServer:
                     view.assigned_node, NodeStatus.READY, current_task_id=None)
             return {"cancelled": cancelled}
 
+        @app.post("/v1/tasks/{task_id}/delete")
+        async def delete_task_post(task_id: str) -> dict:
+            if not await self.delete_task(task_id):
+                raise HTTPException(404, "no such task")
+            return {"deleted": True}
+
+        @app.post("/v1/tasks/clear")
+        async def clear_queue_post() -> dict:
+            return await self.clear_queue()
+
+        @app.delete("/v1/tasks/{task_id}")
+        async def delete_task(task_id: str) -> dict:
+            if not await self.delete_task(task_id):
+                raise HTTPException(404, "no such task")
+            return {"deleted": True}
+
+        @app.delete("/v1/tasks")
+        async def clear_queue() -> dict:
+            return await self.clear_queue()
+
         @app.get("/v1/tasks")
-        async def list_tasks(state: str | None = None) -> list[dict]:
-            return [v.model_dump(mode="json") for v in self.router.list_tasks(state)]
+        async def list_tasks(state: str | None = None, limit: int = 100) -> list[dict]:
+            cap = min(max(limit, 1), 1000)
+            return [v.model_dump(mode="json")
+                    for v in self.router.list_tasks(state, limit=cap)]
 
         @app.get("/v1/nodes")
         async def nodes() -> list[dict]:
@@ -842,6 +864,100 @@ class SchedulerServer:
             await self._schedule_now()
 
     # -------------------------------------------------------------- shutdown
+
+    async def _revoke_assignment(self, task_id: str, attempt_id: str | None,
+                                 node_id: str, reason: str) -> None:
+        ws = self.conns.get(node_id)
+        if ws is not None:
+            with contextlib.suppress(Exception):
+                await ws.send_text(protocol.dumps(protocol.msg_revoke(
+                    task_id, attempt_id or "", reason)))
+        self.registry.set_status(
+            node_id, NodeStatus.READY, current_task_id=None)
+
+    async def delete_session(self, session_id: str, actor: str = "server") -> bool:
+        try:
+            self.sessions.delete(session_id)
+        except KeyError:
+            return False
+        self._compacting.discard(session_id)
+        await self.events.publish(
+            "session.deleted", {"session_id": session_id, "actor": actor})
+        return True
+
+    async def clear_sessions(self, actor: str = "server") -> dict:
+        n = self.sessions.clear()
+        turns = self.contexts.clear()
+        self._compacting.clear()
+        counts = {"sessions": n, "context_turns": turns}
+        await self.events.publish("sessions.cleared", {"actor": actor, **counts})
+        return counts
+
+    async def delete_task(self, task_id: str, actor: str = "server") -> bool:
+        view = self.router.get_task(task_id)
+        if view is None:
+            return False
+        if (view.state.value in ("assigned", "running")
+                and view.assigned_node):
+            await self._revoke_assignment(
+                task_id, view.attempt_id, view.assigned_node, "task deleted")
+        self.workspaces.cleanup(task_id)
+        self.progress.pop(task_id, None)
+        for race_id, members in list(self.race_groups.items()):
+            kept = [t for t in members if t != task_id]
+            if kept:
+                self.race_groups[race_id] = kept
+            else:
+                del self.race_groups[race_id]
+        self.router.delete(task_id)
+        await self.events.publish(
+            "task.deleted", {"task_id": task_id, "actor": actor})
+        return True
+
+    async def clear_queue(self, actor: str = "server") -> dict:
+        revoked = 0
+        for task_id, attempt_id, node_id in self.router.inflight_assignments():
+            await self._revoke_assignment(
+                task_id, attempt_id, node_id, "queue cleared")
+            self.workspaces.cleanup(task_id)
+            revoked += 1
+        n = self.router.clear()
+        ws = self.workspaces.clear()
+        self.progress.clear()
+        self.race_groups.clear()
+        counts = {"tasks": n, "revoked": revoked, "workspaces": ws}
+        await self.events.publish("queue.cleared", {"actor": actor, **counts})
+        return counts
+
+    async def clear_data(self, actor: str = "server") -> dict:
+        """Wipe sessions, the task queue, and stored operational data.
+
+        Nodes stay registered and connected. In-flight tasks are revoked
+        so agents stop work that no longer has a queue row. Git history
+        in state-repo / code-repo is left alone (audit trail).
+        """
+        revoked = 0
+        for task_id, attempt_id, node_id in self.router.inflight_assignments():
+            await self._revoke_assignment(
+                task_id, attempt_id, node_id, "server data cleared")
+            revoked += 1
+
+        counts = {
+            "sessions": self.sessions.clear(),
+            "context_turns": self.contexts.clear(),
+            "tasks": self.router.clear(),
+            "ledger": self.ledger.clear(),
+            "workspaces": self.workspaces.clear(),
+            "live_workspaces": self.live_workspaces.clear(),
+            "suggestions": self.suggestions.clear(),
+            "revoked": revoked,
+        }
+        self.progress.clear()
+        self.race_groups.clear()
+        self._compacting.clear()
+        await self.events.publish("server.cleared", {"actor": actor, **counts})
+        log.info("cleared server data: %s", counts)
+        return counts
 
     async def shutdown_active_tasks(self) -> list[dict]:
         """Nodes currently holding a task, for the confirm-before-kill

@@ -67,13 +67,18 @@ header { display: flex; align-items: center; justify-content: space-between;
               min-width: 160px; padding: .3rem; box-shadow: 0 8px 24px rgba(0,0,0,.4);
               z-index: 10; }
 .menu-panel[hidden] { display: none; }
-.menu-item { display: flex; align-items: center; justify-content: space-between;
-             gap: .5rem; padding: .45rem .6rem; border-radius: 0; font-size: .85rem;
+.menu-item { display: flex; align-items: center; gap: .4rem;
+             padding: .45rem .6rem; border-radius: 0; font-size: .85rem;
              color: var(--fg); text-decoration: none; }
 .menu-item[aria-disabled="true"] { color: var(--muted); cursor: default; }
-.menu-item:not([aria-disabled="true"]):hover { background: var(--hover-bg); }
-.soon { font-size: .65rem; border: 1px solid var(--border); border-radius: 0;
-        padding: 0 .35rem; color: var(--muted); }
+/* the view you are already on: still listed, so the nav reads the same
+   everywhere, but marked and not a link back to itself. The marker is
+   transparent elsewhere so every label starts on the same column. */
+.menu-item::before { content: '›'; color: transparent; }
+.menu-item[aria-current="page"] { color: var(--accent); cursor: default; }
+.menu-item[aria-current="page"]::before { color: var(--accent); }
+.menu-item:not([aria-disabled="true"]):not([aria-current="page"]):hover {
+  background: var(--hover-bg); }
 
 /* phones: the header gives back its height, tables tighten up, and any
    table too wide to fit scrolls sideways inside its own card instead of

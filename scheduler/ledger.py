@@ -83,6 +83,13 @@ class Ledger:
                 for n, c, a in by_node],
         }
 
+    def clear(self) -> int:
+        """Delete every ledger row. Returns how many were removed."""
+        n = self._db.execute("SELECT COUNT(*) FROM ledger").fetchone()[0]
+        self._db.execute("DELETE FROM ledger")
+        self._db.commit()
+        return n
+
     def export_state(self) -> str:
         import json
         return json.dumps(self.summary(), indent=2, sort_keys=True)

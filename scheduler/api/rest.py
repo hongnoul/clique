@@ -2,9 +2,9 @@
 
 Core routes (register, tasks, nodes, clusters, clique, stats, join
 assets) live in ``scheduler/server.py``. This module adds the extended
-surface: sessions, suggestions, vcs, kick, the OpenAI-compatible
-``/v1/chat/completions`` adapter, and the web pages (``/dash``,
-``/chat``) with their static assets.
+surface: sessions, suggestions, vcs, kick, ``/v1/server/clear``, the
+OpenAI-compatible ``/v1/chat/completions`` adapter, and the web pages
+(``/dash``, ``/chat``) with their static assets.
 
 Auth: op-gated routes require ``Authorization: Bearer <token>`` from a
 registered node.
@@ -108,14 +108,27 @@ def register_extended_routes(app: "FastAPI", server: "SchedulerServer") -> None:
                                     session.model_dump(mode="json"))
         return session.model_dump(mode="json")
 
+    @app.delete("/v1/sessions")
+    async def clear_sessions() -> dict:
+        """Remove every session and its stored turns. Dashboard clear-all."""
+        return await server.clear_sessions()
+
+    @app.post("/v1/sessions/clear")
+    async def clear_sessions_post() -> dict:
+        return await server.clear_sessions()
+
     @app.delete("/v1/sessions/{session_id}")
-    async def close_session(session_id: str, request: Request) -> dict:
-        _actor(server, request)
-        try:
-            server.sessions.close(session_id)
-        except KeyError:
+    async def delete_session(session_id: str) -> dict:
+        """Remove one session and its conversation from the server."""
+        if not await server.delete_session(session_id):
             raise HTTPException(404, "no such session")
-        return {"closed": True}
+        return {"deleted": True, "closed": True}
+
+    @app.post("/v1/sessions/{session_id}/delete")
+    async def delete_session_post(session_id: str) -> dict:
+        if not await server.delete_session(session_id):
+            raise HTTPException(404, "no such session")
+        return {"deleted": True, "closed": True}
 
     # The web chat at /chat has no keypair, so it cannot mint a node
     # token for the routes above. These two mirror create/close for it,
@@ -159,12 +172,21 @@ def register_extended_routes(app: "FastAPI", server: "SchedulerServer") -> None:
 
     # ---------------------------------------------------------------- server
 
+    @app.post("/v1/server/clear")
+    async def clear(request: Request) -> dict:
+        """Wipe sessions, the task queue, ledger, and workspaces.
+
+        Nodes stay joined. Auth-gated like shutdown/kick.
+        """
+        actor = _actor(server, request)
+        return await server.clear_data(actor)
+
     @app.post("/v1/server/shutdown")
     async def shutdown(body: dict, request: Request) -> dict:
         """Stop the server -- from any node, not just its own machine.
         Refuses (409) with the list of active tasks unless confirm=true,
         so a caller (the CLI) can warn and ask before anything is killed."""
-        _actor(server, request)
+        actor = _actor(server, request)
         active = await server.shutdown_active_tasks()
         if active and not body.get("confirm"):
             raise HTTPException(409, {

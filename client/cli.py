@@ -1,18 +1,42 @@
-"""Headless CLI (MVP implementation).
+"""Headless CLI. `clique help` prints the reference below verbatim.
 
-Commands:
-  clique                             button home: Host Join Chat Dashboard Logs
-  clique ui [--server URL]           same home screen, explicit
-  clique serve [--foreground]        start the server in the background
-  clique join [--server URL] ...     join this device as a node, in the background
-  clique status                      what's running locally (server/agent), on demand
-  clique logs {server|join} [-f]     tail a backgrounded process's log
-  clique stop / clique leave         gracefully stop the server / disconnect the node
-  clique nodes [--server URL]        list nodes and clusters
-  clique dash [--server URL] [--full]  live terminal dashboard (polls /dash.txt)
-  clique submit PROMPT               chat turn (sticky session by default)
-  clique task TASK_ID [--cancel]     inspect or cancel a task
-  clique stats                       queue and node stats
+Commands that talk to a clique take --server URL, falling back to
+$CLIQUE_SERVER and then to mDNS discovery, so the flag is only needed
+to override. The rest (status, logs, leave) are local-only.
+
+  clique                               button home: Host Join Chat Dashboard
+  clique ui                            the same home screen, explicit
+
+run one:
+  clique serve [--foreground]          start the server in the background
+  clique join [--runtime ...]          join this device as a node, backgrounded
+  clique onboard [--dry]               probe, auto-detect runtime, then join
+  clique join-remote SSH_HOST          join a headless box over ssh
+  clique leave / clique stop           disconnect this node / stop the server
+  clique status                        what's running locally, on demand
+  clique logs {server|join} [-f]       tail a backgrounded process's log
+
+use it:
+  clique submit PROMPT                 chat turn (sticky session by default)
+  clique code-submit -p TEXT -f FILE   code edit, test-verified before commit
+  clique task TASK_ID [--cancel]       inspect or cancel a task
+  clique sessions [--show|--close ID]  list or manage chat sessions
+  clique workspace --create|--watch    live shared workspaces
+
+watch it:
+  clique dash [--once|--full]          terminal dashboard + web UI links
+  clique nodes / clique stats          nodes and clusters / queue and load
+  clique ledger                        accepted-work accounting per node
+  clique suggestions [--dismiss ID]    model-change suggestions
+  clique vcs [--diff A..B]             state snapshot history and rollback
+
+administer it (any joined node may):
+  clique kick NODE_ID                  remove a node from the clique
+  clique clear                         wipe sessions, queue, stored data
+  clique mcp install|status|serve|grow clique tools inside agent harnesses
+
+The web UI is served by the server node at <server>/dash (live) and
+<server>/chat (ask it something); `clique dash` prints both links.
 
 `serve` and `join` background themselves by default so one terminal can
 run serve, then join, then submit/dash/etc. in sequence; pass
@@ -48,6 +72,24 @@ def _home_default(ctx: typer.Context,
         from client.home import main as home_main
         home_main(server)
         raise typer.Exit(0)
+
+
+@app.command(name="help")
+def help_cmd() -> None:
+    """What every clique command does, grouped by what you came to do."""
+    import re
+    from rich.markup import escape
+
+    for line in (__doc__ or "").strip().splitlines():
+        entry = re.match(r"^(\s+)(clique\b.*?)(\s{2,})(\S.*)$", line)
+        if entry:
+            pad, cmd, gap, what = entry.groups()
+            console.print(f"{pad}[bold cyan]{escape(cmd)}[/]{gap}"
+                          f"[dim]{escape(what)}[/]")
+        elif line.endswith(":"):
+            console.print(f"[bold]{escape(line)}[/]")
+        else:
+            console.print(escape(line))
 
 
 @app.command()
@@ -525,6 +567,40 @@ def task(task_id: str, server: str = typer.Option(None),
     asyncio.run(run())
 
 
+def _browser_base(client: CliqueClient) -> str:
+    """Base URL to hand a browser for this clique.
+
+    Prefers the server's public tunnel when one is up, so the link also
+    works from a phone that is not on the LAN; otherwise it is simply
+    the address this CLI is already talking to.
+    """
+    base = client.base_url.rstrip("/")
+    try:
+        import json as _json
+        import urllib.request as _url
+
+        from common.tls import urlopen_kwargs
+        with _url.urlopen(base + "/v1/clique", timeout=3,
+                          **urlopen_kwargs(base)) as r:
+            public = (_json.loads(r.read().decode()) or {}).get("public_url")
+        if public:
+            return str(public).rstrip("/")
+    except Exception:
+        pass  # server down or old: the address we dialed is still right
+    return base
+
+
+def _web_links(client: CliqueClient) -> str:
+    """One line of clickable web UI links (terminals hyperlink OSC 8).
+
+    Resolved once by the caller: the live dashboard redraws on a timer
+    and should not re-probe the server just to restate its own address.
+    """
+    base = _browser_base(client)
+    return (f"[dim]web[/] [link={base}/dash]{base}/dash[/link]"
+            f"  [dim]·[/] [link={base}/chat]{base}/chat[/link]")
+
+
 @app.command()
 def dash(server: str = typer.Option(None),
          once: bool = typer.Option(False, "--once",
@@ -533,13 +609,19 @@ def dash(server: str = typer.Option(None),
          full: bool = typer.Option(False, "--full",
                                    help="fullscreen textual TUI "
                                    "(needs local install + tty)")) -> None:
-    """Live terminal dashboard (headless-friendly, polls the server)."""
+    """Live terminal dashboard, plus the web dashboard/chat links.
+
+    The live view redraws in place and is left with `q` (or Ctrl+C),
+    like `clique logs -f`. For the dashboard without a terminal at all,
+    open the web link it prints, or take one snapshot with --once.
+    """
     client = _resolve(server)
+    links = _web_links(client)
     if full:
+        console.print(links)
         from client.tui import DashboardApp
         asyncio.run(DashboardApp(client, interval=interval).run_dashboard())
         return
-    import time
     import urllib.request
     base = client.base_url
 
@@ -554,12 +636,20 @@ def dash(server: str = typer.Option(None),
 
     if once:
         console.print(fetch("/dash.txt"))
+        console.print(links)
         return
+
+    from client import daemon
     try:
-        while True:
-            console.clear() if hasattr(console, "clear") else None
-            console.print(fetch("/dash.txt"))
-            time.sleep(interval)
+        with daemon.quit_key_reader() as quit_pressed:
+            while True:
+                console.clear() if hasattr(console, "clear") else None
+                console.print(fetch("/dash.txt"))
+                console.print(links)
+                console.print("[dim]-- live; q to stop "
+                              "(Ctrl+C also works) --[/]")
+                if quit_pressed(interval):  # doubles as the frame delay
+                    break
     except KeyboardInterrupt:
         pass
 
@@ -626,6 +716,24 @@ def kick(node_id: str, server: str = typer.Option(None)) -> None:
     client = _authed(server)
     asyncio.run(client.kick(node_id))
     console.print(f"kicked {node_id}")
+
+
+@app.command()
+def clear(server: str = typer.Option(None),
+          yes: bool = typer.Option(
+              False, "--yes", "-y",
+              help="don't prompt before wiping sessions, queue, and data")) -> None:
+    """Delete all sessions, queued/historical tasks, and stored data.
+    Joined nodes stay; the clique itself is not torn down."""
+    if not (yes or typer.confirm(
+            "Wipe every session, task, and stored workspace on this server?")):
+        console.print("[dim]aborted[/]")
+        raise typer.Exit(0)
+    client = _authed(server)
+    counts = asyncio.run(client.clear_data())
+    client.forget_chat_session()
+    console.print("[green]cleared[/]")
+    console.print(counts)
 
 
 @app.command()

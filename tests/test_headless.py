@@ -404,7 +404,8 @@ async def test_served_tui_runs_once_as_subprocess(headless_server,
 
 
 async def test_cli_dash_once(headless_server, capsys):
-    """`clique dash --once --server URL` prints the /dash.txt snapshot."""
+    """`clique dash --once --server URL` prints the /dash.txt snapshot
+    plus the web UI links, so nobody has to type an address."""
     from typer.testing import CliRunner
 
     from client.cli import app
@@ -415,6 +416,111 @@ async def test_cli_dash_once(headless_server, capsys):
     )
     assert result.exit_code == 0, result.output
     assert "clique:" in result.output
+    assert f"{headless_server}/dash" in result.output
+    assert f"{headless_server}/chat" in result.output
+
+
+def _read_until(fd: int, needle: bytes, timeout: float) -> bytes:
+    """Drain a pty master until `needle` shows up (or time runs out)."""
+    import os
+    import select
+    import time as _time
+    seen, deadline = b"", _time.monotonic() + timeout
+    while _time.monotonic() < deadline and needle not in seen:
+        ready, _, _ = select.select([fd], [], [], 0.2)
+        if ready:
+            try:
+                seen += os.read(fd, 4096)
+            except OSError:
+                break
+    return seen
+
+
+async def test_cli_dash_live_view_quits_on_keypress(headless_server):
+    """The live dashboard must not hold the terminal hostage until
+    Ctrl+C: `q` leaves straight away, even mid-interval."""
+    import os
+    import pty
+    import subprocess
+    import sys
+
+    master, slave = pty.openpty()
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "client.cli", "dash",
+         "--server", headless_server, "--interval", "30"],
+        stdin=slave, stdout=slave, stderr=subprocess.STDOUT, close_fds=True)
+    try:
+        seen = await asyncio.to_thread(_read_until, master, b"q to stop", 25)
+        assert b"q to stop" in seen, seen[-400:]
+        await asyncio.to_thread(os.write, master, b"q")  # no Enter needed
+        # 30s frame interval: anything but an instant exit means the key
+        # was swallowed until the next redraw, which is the bug.
+        code = await asyncio.to_thread(proc.wait, 10)
+        assert code == 0
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            await asyncio.to_thread(proc.wait, 5)
+        os.close(slave)
+        os.close(master)
+
+
+async def test_quit_key_reader_restores_the_terminal():
+    """cbreak while a live view runs, canonical mode back afterwards --
+    otherwise the shell is left without echo."""
+    import pty
+    import subprocess
+    import sys
+
+    probe = (
+        "import termios\n"
+        "from client.daemon import quit_key_reader\n"
+        "MASK = termios.ICANON | termios.ECHO\n"
+        "before = termios.tcgetattr(0)[3]\n"
+        "with quit_key_reader() as pressed:\n"
+        "    inside = termios.tcgetattr(0)[3]\n"
+        "after = termios.tcgetattr(0)[3]\n"
+        "print('cbreak', not inside & MASK, 'restored', "
+        "after & MASK == before & MASK)\n"
+    )
+    master, slave = pty.openpty()
+    try:
+        done = await asyncio.to_thread(
+            subprocess.run, [sys.executable, "-c", probe],
+            **{"stdin": slave, "capture_output": True, "text": True,
+               "timeout": 30})
+        assert "cbreak True restored True" in done.stdout, done.stdout or done.stderr
+    finally:
+        import os
+        os.close(slave)
+        os.close(master)
+
+
+async def test_cli_dash_prefers_public_url(headless_server, monkeypatch):
+    """A tunnelled clique advertises its https URL; the links use it so
+    they also open on a phone that is not on the LAN."""
+    import client.cli as _cli
+
+    tunnel = "https://example.trycloudflare.com"
+    monkeypatch.setattr(_cli, "_browser_base", lambda client: tunnel)
+    assert f"{tunnel}/dash" in _cli._web_links(_cli._resolve(headless_server))
+
+
+async def test_cli_help_lists_every_command():
+    """`clique help` is the command reference, and it must not drift
+    from the commands typer actually exposes."""
+    from typer.testing import CliRunner
+
+    from client.cli import app
+
+    result = await asyncio.to_thread(CliRunner().invoke, app, ["help"])
+    assert result.exit_code == 0, result.output
+    registered = {(c.name or c.callback.__name__).replace("_", "-")
+                  for c in app.registered_commands}
+    registered |= {g.name for g in app.registered_groups if g.name}
+    assert "serve" in registered and "mcp" in registered  # sanity on parsing
+    for name in sorted(registered):
+        assert f"clique {name}" in result.output, f"help omits {name}"
 
 
 def test_join_forwards_base_url_to_agent(monkeypatch):

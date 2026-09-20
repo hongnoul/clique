@@ -169,9 +169,11 @@ async def test_session_lifecycle_and_context(clique):
 
         # close
         r = await c.delete(f"{base}/v1/sessions/{sid}", headers=op_hdr)
-        assert r.json()["closed"]
+        assert r.json()["deleted"]
         active = (await c.get(base + "/v1/sessions")).json()
         assert sid not in [s["session_id"] for s in active]
+        gone = await c.get(f"{base}/v1/sessions/{sid}")
+        assert gone.status_code == 404
 
 
 @pytest.mark.asyncio
@@ -241,6 +243,50 @@ async def test_kick_requires_auth_and_removes_node(clique):
         assert info is None or info.status.value == "offline"
 
 
+
+
+@pytest.mark.asyncio
+async def test_clear_requires_auth_and_wipes_sessions_and_queue(clique):
+    base, server, agents = clique
+    op_hdr = hdr(server, agents, "small-node")
+    async with httpx.AsyncClient() as c:
+        r = await c.post(base + "/v1/server/clear")
+        assert r.status_code == 401
+
+        sid = (await c.post(base + "/v1/sessions",
+                            json={"cluster_key": "echo-7b-none"},
+                            headers=op_hdr)).json()["session_id"]
+        req = TaskRequest(prompt="wipe me", session_id=sid,
+                          idempotency_key=uuid.uuid4().hex)
+        tid = (await c.post(base + "/v1/tasks",
+                            json=req.model_dump(mode="json"))).json()["task_id"]
+        await wait_done(base, tid)
+        assert (await c.get(base + "/v1/sessions")).json()
+        assert (await c.get(base + "/v1/tasks")).json()
+
+        r = await c.post(base + "/v1/server/clear", headers=op_hdr)
+        r.raise_for_status()
+        counts = r.json()
+        assert counts["sessions"] >= 1
+        assert counts["tasks"] >= 1
+        assert counts["context_turns"] >= 1
+        assert (await c.get(base + "/v1/sessions")).json() == []
+        assert (await c.get(base + "/v1/tasks")).json() == []
+        assert (await c.get(base + "/v1/ledger")).json()["total_terminal"] == 0
+        # nodes stay joined
+        nodes = (await c.get(base + "/v1/nodes")).json()
+        assert len(nodes) >= 2
+
+        # clique still accepts new work after the wipe
+        sid2 = (await c.post(base + "/v1/sessions",
+                             json={"cluster_key": "echo-7b-none"},
+                             headers=op_hdr)).json()["session_id"]
+        assert sid2 != sid
+        tid2 = (await c.post(base + "/v1/tasks", json=TaskRequest(
+            prompt="after wipe", idempotency_key=uuid.uuid4().hex
+        ).model_dump(mode="json"))).json()["task_id"]
+        data = await wait_done(base, tid2)
+        assert data["state"] == "succeeded"
 
 
 # ------------------------------------------------------------------------ vcs
@@ -477,8 +523,12 @@ async def test_web_dashboard_served(clique):
     # shared chrome is linked, not inlined per page
     assert assets.status_code == 200 and "--accent" in assets.text
     assert chrome.status_code == 200 and "applyTheme" in chrome.text
-    assert "/chat" in r.text  # menu links to the chat page (notes stub gone)
-    assert "Notes" not in r.text
+    assert "Notes" not in r.text  # the old stub is gone
+    # both views are reachable from the same nav, which chrome.js builds
+    # for every page rather than each page hand-listing the other
+    for href in ("'/dash'", "'/chat'"):
+        assert href in chrome.text, f"shared nav missing {href}"
+    assert "menu-item" not in r.text, "dashboard hand-lists nav items"
     # A merge that pastes chrome.js's theme block back into the page
     # redeclares its consts, and that SyntaxError kills the whole inline
     # script (tables silently stop rendering). Same for double-pasted
