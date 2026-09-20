@@ -805,6 +805,10 @@ def workspace(list: bool = typer.Option(False, "--list", help="list workspaces")
               watch: str = typer.Option(None, "--watch",
                                         help="workspace id to stream live "
                                              "events from (Ctrl-C to stop)"),
+              export: str = typer.Option(None, "--export",
+                                         help="workspace id to export as a "
+                                              "docs-sync bundle (files + "
+                                              "provenance) to stdout"),
               history: str = typer.Option(None, "--history",
                                           help="recent op log for workspace id"),
               commits: str = typer.Option(None, "--commits",
@@ -834,7 +838,7 @@ def workspace(list: bool = typer.Option(False, "--list", help="list workspaces")
                 t = ev.get("type", "?")
                 if t == "workspace.snapshot":
                     console.print(f"[dim]snapshot seq={ev['seq']} files="
-                                  f"{list(ev.get('files', {}))}[/]")
+                                  f"{sorted(ev.get('files', {}))}[/]")
                 elif t == "workspace.delta":
                     rb = " [yellow]rebased[/]" if ev.get("rebased") else ""
                     console.print(f"seq={ev['seq']} {ev['path']}"
@@ -842,6 +846,15 @@ def workspace(list: bool = typer.Option(False, "--list", help="list workspaces")
                                   f" {str(ev.get('actor', ''))[:8]}{rb}")
                 else:
                     console.print(f"[dim]{t}[/] {ev}")
+        elif export:
+            bundle = await client.workspace_export(
+                export, paths=[file] if file else None)
+            console.print(f"[dim]workspace {export} seq={bundle['seq']}"
+                          f" files={sorted(bundle['files'])}[/]")
+            for p, text in bundle["files"].items():
+                console.print(f"[bold]--- {p} ---[/]\n{text}")
+            for c in bundle.get("commits", [])[:5]:
+                console.print(f"[dim]{c['sha'][:10]}[/] {c['message']}")
         elif history:
             for h in await client.workspace_history(history, path=file):
                 rb = " [yellow]rebased[/]" if h["rebased"] else ""

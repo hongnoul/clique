@@ -15,7 +15,7 @@ from typing import AsyncIterator, Sequence
 import httpx
 
 from common.errors import ModelNotReadyError
-from common.types import ChatMessage, ModelSpec, TaskType
+from common.types import ChatMessage, ModelSpec, TaskType, ToolCall, ToolDef
 
 
 def _as_openai_messages(
@@ -24,10 +24,27 @@ def _as_openai_messages(
         out = []
         for m in messages:
             if isinstance(m, dict):
-                out.append({"role": m.get("role", "user"),
-                            "content": m.get("content", "")})
+                entry: dict = {"role": m.get("role", "user"),
+                               "content": m.get("content", "")}
+                if m.get("tool_calls"):
+                    entry["tool_calls"] = m["tool_calls"]
+                if m.get("tool_call_id"):
+                    entry["tool_call_id"] = m["tool_call_id"]
+                    if m.get("name"):
+                        entry["name"] = m["name"]
+                out.append(entry)
             else:
-                out.append({"role": m.role, "content": m.content})
+                entry = {"role": m.role, "content": m.content}
+                if m.tool_calls:
+                    entry["tool_calls"] = [
+                        {"id": tc.call_id or f"call_{i}",
+                         "type": "function",
+                         "function": {"name": tc.name,
+                                      "arguments": json.dumps(tc.arguments)}}
+                        for i, tc in enumerate(m.tool_calls)]
+                if m.tool_call_id:
+                    entry["tool_call_id"] = m.tool_call_id
+                out.append(entry)
         return out
     return [{"role": "user", "content": prompt}]
 
@@ -42,6 +59,132 @@ def _joined_prompt(prompt: str, messages: Sequence[ChatMessage | dict] | None) -
         else:
             parts.append(f"{m.role}: {m.content}")
     return "\n".join(parts)
+
+
+def _as_openai_tools(tools: Sequence[ToolDef | dict] | None) -> list[dict] | None:
+    """ToolDef list -> OpenAI tools array. None when no tools offered."""
+    if not tools:
+        return None
+    out = []
+    for t in tools:
+        if isinstance(t, dict):
+            name = t.get("name") or t.get("function", {}).get("name", "")
+            desc = t.get("description", "")
+            params = t.get("parameters")
+            if params is None and isinstance(t.get("function"), dict):
+                f = t["function"]
+                desc = desc or f.get("description", "")
+                params = f.get("parameters", {})
+            if not name:
+                continue
+            out.append({"type": "function",
+                        "function": {"name": name, "description": desc,
+                                     "parameters": params or {}}})
+        else:
+            out.append({"type": "function",
+                        "function": {"name": t.name,
+                                     "description": t.description,
+                                     "parameters": t.parameters or {}}})
+    return out or None
+
+
+def _fallback_call(obj: dict) -> ToolCall | None:
+    """One ToolCall from a describe-instead-of-call JSON object, or None."""
+    if not isinstance(obj, dict):
+        return None
+    name = obj.get("action") or obj.get("name") or obj.get("tool") \
+        or obj.get("function") or ""
+    args = obj.get("arguments", {})
+    if isinstance(args, str):
+        try:
+            args = json.loads(args)
+        except json.JSONDecodeError:
+            args = {}
+    if name and isinstance(args, dict):
+        return ToolCall(call_id="", name=name, arguments=args)
+    return None
+
+
+def _fallback_call_xml(text: str) -> ToolCall | None:
+    """Nemotron/Qwen tool shape: <tool_call><function=NAME>args</function>
+    </tool_call>. Args may be JSON, empty, or absent."""
+    import re
+    m = re.search(r"<tool_call>\s*<function=([^>\s]+)>\s*(.*?)\s*"
+                  r"</function>\s*</tool_call>", text, re.DOTALL)
+    if not m:
+        m = re.search(r"<function=([^>\s]+)>\s*(.*?)\s*</function>",
+                      text, re.DOTALL)
+    if not m:
+        return None
+    name, raw_args = m.group(1).strip(), (m.group(2) or "").strip()
+    args: dict = {}
+    if raw_args:
+        try:
+            parsed = json.loads(raw_args)
+            args = parsed if isinstance(parsed, dict) else {}
+        except json.JSONDecodeError:
+            args = {}
+    if name:
+        return ToolCall(call_id="", name=name, arguments=args)
+    return None
+
+
+def parse_tool_calls_response(data: dict) -> tuple[str, list[ToolCall]]:
+    """Split one non-streaming choice into (content, tool_calls).
+
+    Handles both native ``tool_calls`` and the text fallback where a
+    small model emits ``{"action": "<name>", "arguments": {...}}`` as
+    literal text (describe-instead-of-call).
+    """
+    calls: list[ToolCall] = []
+    try:
+        choice = data["choices"][0]
+    except (KeyError, IndexError):
+        return "", []
+    msg = choice.get("message", {})
+    content = msg.get("content") or ""
+    for tc in msg.get("tool_calls") or []:
+        fn = tc.get("function", {})
+        try:
+            args = json.loads(fn.get("arguments", "{}") or "{}")
+        except json.JSONDecodeError:
+            args = {"_raw": fn.get("arguments", "")}
+        if not isinstance(args, dict):
+            args = {"_raw": args}
+        calls.append(ToolCall(call_id=tc.get("id", ""),
+                              name=fn.get("name", ""), arguments=args))
+    if not calls and content.strip().startswith("{"):
+        try:
+            obj = json.loads(content.strip())
+        except json.JSONDecodeError:
+            obj = None
+        fb = _fallback_call(obj or {})
+        if fb is not None:
+            calls = [fb]
+            content = ""
+    if not calls and "</think>" in content:
+        # reasoning models wrap the answer after </think>: the fallback
+        # JSON may follow the think block instead of starting the text.
+        from common.think import split_think
+        _, tail = split_think(content)
+        tail = tail.strip()
+        if tail.startswith("{"):
+            try:
+                obj = json.loads(tail)
+            except json.JSONDecodeError:
+                obj = None
+            fb = _fallback_call(obj or {})
+            if fb is not None:
+                calls = [fb]
+                content = ""
+    if not calls:
+        # Nemotron/Qwen XML shape anywhere in the text (often after
+        # </think>): <tool_call><function=name>args</function></tool_call>
+        fb = _fallback_call_xml(content)
+        if fb is not None:
+            calls = [fb]
+            content = ""
+    return content, calls
 
 
 class BaseRuntime:
@@ -59,6 +202,13 @@ class BaseRuntime:
 
     async def cancel(self) -> None:
         self._cancel.set()
+
+    async def infer_tools(
+            self, messages: list[dict], tools: list[dict] | None,
+            tool_choice: str | dict | None,
+            max_tokens: int) -> tuple[str, list[ToolCall]]:
+        """One non-streaming round with tools. Returns (content, calls)."""
+        raise NotImplementedError
 
 
 class EchoRuntime(BaseRuntime):
@@ -83,6 +233,12 @@ class EchoRuntime(BaseRuntime):
                 return
             await asyncio.sleep(self.delay_s)
             yield w + " "
+
+    async def infer_tools(
+            self, messages: list[dict], tools: list[dict] | None,
+            tool_choice: str | dict | None,
+            max_tokens: int) -> tuple[str, list[ToolCall]]:
+        return "(echo has no tools)", []
 
 
 class OpenAICompatRuntime(BaseRuntime):
@@ -134,6 +290,38 @@ class OpenAICompatRuntime(BaseRuntime):
                             yield delta
         except httpx.HTTPError as e:
             raise ModelNotReadyError(f"backend unreachable: {e}") from e
+
+    async def infer_tools(
+            self, messages: list[dict], tools: list[dict] | None,
+            tool_choice: str | dict | None,
+            max_tokens: int) -> tuple[str, list[ToolCall]]:
+        """One blocking round offering tools to the backend (vLLM)."""
+        self._cancel.clear()
+        body: dict = {
+            "model": self.model_name,
+            "messages": messages,
+            "max_tokens": max_tokens,
+            "stream": False,
+        }
+        if tools:
+            body["tools"] = tools
+            # NOTE: fleet vLLM runs without --enable-auto-tool-choice /
+            # --tool-call-parser, so "auto" 400s. Only forward explicit
+            # non-auto choices; the transcript nudge + text fallback
+            # parser carry the loop on this fleet.
+            if tool_choice and tool_choice != "auto":
+                body["tool_choice"] = tool_choice
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout_s) as c:
+                r = await c.post(f"{self.base_url}/chat/completions",
+                                 json=body)
+                if r.status_code != 200:
+                    text = r.text[:500]
+                    raise ModelNotReadyError(f"backend {r.status_code}: {text}")
+                data = r.json()
+        except httpx.HTTPError as e:
+            raise ModelNotReadyError(f"backend unreachable: {e}") from e
+        return parse_tool_calls_response(data)
 
 
 def build_runtime(runtime: str, base_url: str = "", model_name: str = "") -> BaseRuntime:

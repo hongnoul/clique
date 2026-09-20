@@ -120,11 +120,34 @@ class CodeTaskSpec(BaseModel):
     use_tools: bool = False  # node-local tool loop (capable models only)
 
 
+class ToolDef(BaseModel):
+    """One OpenAI-style function tool, carried end to end.
+
+    Stored on TaskRequest so a chat-completions caller (jcode, claude)
+    can hand the worker its MCP tool manifest. The executor offers
+    these to the backend; calls come back and run server-side.
+    """
+
+    name: str
+    description: str = ""
+    parameters: dict = Field(default_factory=dict)
+
+
+class ToolCall(BaseModel):
+    """One model-requested invocation, OpenAI tool_calls wire shape."""
+
+    call_id: str = ""
+    name: str = ""
+    arguments: dict = Field(default_factory=dict)
+
+
 class ChatMessage(BaseModel):
     """One chat turn on the worker wire (OpenAI-style role/content)."""
 
     role: str
     content: str
+    tool_calls: list[ToolCall] | None = None
+    tool_call_id: str | None = None  # set on role=tool result messages
 
 
 class TaskRequest(BaseModel):
@@ -133,6 +156,8 @@ class TaskRequest(BaseModel):
     task_type: TaskType = TaskType.CHAT
     prompt: str
     messages: list[ChatMessage] | None = None
+    tools: list[ToolDef] | None = None  # function manifest for agentic loop
+    tool_choice: str | dict | None = None  # "auto" | "none" | {"name": ...}
     session_id: str | None = None
     model_hint: str | None = None  # cluster_key prefix; hard filter when set (omit for auto)
     workspace_id: str | None = None  # live collab workspace (file mirror)

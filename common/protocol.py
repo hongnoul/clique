@@ -27,6 +27,8 @@ ASSIGN = "assign"
 REVOKE = "revoke"
 RESULT = "result"
 PROGRESS = "progress"
+TOOL_CALL = "tool_call"  # agent -> server: blocking tool execution request
+TOOL_RESULT = "tool_result"  # server -> agent: tool execution outcome
 LEAVE = "leave"
 SHUTDOWN = "shutdown"
 # workspace realtime collab
@@ -85,6 +87,20 @@ def msg_result(result: TaskResult) -> dict[str, Any]:
 def msg_progress(task_id: str, attempt_id: str, token_offset: int, text_delta: str) -> dict[str, Any]:
     return {"type": PROGRESS, "task_id": task_id, "attempt_id": attempt_id,
             "token_offset": token_offset, "text_delta": text_delta}
+
+
+def msg_tool_call(task_id: str, attempt_id: str, call_id: str,
+                  name: str, arguments: dict) -> dict[str, Any]:
+    """Agent -> server: execute one tool call, reply with TOOL_RESULT."""
+    return {"type": TOOL_CALL, "task_id": task_id, "attempt_id": attempt_id,
+            "call_id": call_id, "name": name, "arguments": arguments}
+
+
+def msg_tool_result(task_id: str, call_id: str, ok: bool,
+                    result: Any) -> dict[str, Any]:
+    """Server -> agent: outcome of one tool_call (result or error string)."""
+    return {"type": TOOL_RESULT, "task_id": task_id, "call_id": call_id,
+            "ok": ok, "result": result}
 
 
 def msg_leave(reason: str) -> dict[str, Any]:

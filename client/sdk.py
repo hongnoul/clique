@@ -479,6 +479,19 @@ class CliqueClient:
     async def workspace_flush(self, workspace_id: str) -> dict:
         return await self._post(f"/v1/workspaces/{workspace_id}/flush")
 
+    async def workspace_export(self, workspace_id: str,
+                               paths: list[str] | None = None) -> dict:
+        """Export full file contents + git provenance for docs-sync.
+
+        Dogfood agents draft in the live workspace, export the bundle,
+        and open a PR from a credentialed machine. Optional path filter.
+        """
+        params: dict = {}
+        if paths:
+            params["paths"] = ",".join(paths)
+        return await self._get(
+            f"/v1/workspaces/{workspace_id}/export", **params)
+
     async def workspace_watch(self, workspace_id: str,
                               timeout_s: float = 0.0):
         """Yield realtime workspace events over /ws/workspace/{id}.
