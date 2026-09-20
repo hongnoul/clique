@@ -143,9 +143,10 @@ account), run a quick tunnel next to the server and share the https
 URL it prints:
 
 ```bash
-# on the server box (no account, no sudo):
-cloudflared tunnel --url http://127.0.0.1:7777
-# -> https://<random>.trycloudflare.com
+# on the server box (no account, no sudo): installs cloudflared,
+# a user systemd unit, and prints the https URL
+sh deploy/setup-tunnel.sh
+# (which boils down to: cloudflared tunnel --url http://127.0.0.1:7777)
 ```
 
 Write that URL to `~/.clique/public_url` (a `clique-tunnel.service`

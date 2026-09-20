@@ -233,22 +233,33 @@ async def test_onboard_dry_run_and_unreachable(headless_server, capsys):
 
 
 def test_bootstrap_sh_is_posix_clean():
-    import subprocess
-    src = (Path(__file__).resolve().parents[1] / "scripts"
-           / "bootstrap.sh").read_text()
+    src = _assert_posix_clean("scripts/bootstrap.sh")
     assert "GIT_TERMINAL_PROMPT=0" in src
     assert "CLIQUE_GITHUB_TOKEN" in src
     assert "CLIQUE_SERVER" in src  # server-first source, GitHub is fallback
     assert "fetch_server_bundle" in src
-    assert "$'" not in src  # no bashisms: runs under POSIX sh
     # BSD od separates bytes with two spaces, so the check must not
     # rely on single-space "1f 8b" (never matches on macOS tarballs).
     assert 'grep -q "1f 8b"' not in src
-    proc = subprocess.run(
-        ["sh", "-n", str(Path(__file__).resolve().parents[1]
-                         / "scripts" / "bootstrap.sh")],
-        capture_output=True, text=True, timeout=30)
-    assert proc.returncode == 0, f"bootstrap.sh fails sh -n: {proc.stderr}"
+
+
+def test_setup_tunnel_sh_is_posix_clean():
+    """deploy/setup-tunnel.sh: zero-context tunnel installer parses."""
+    src = _assert_posix_clean("deploy/setup-tunnel.sh")
+    assert "trycloudflare" in src
+    assert "public_url" in src        # feeds _public_url on the server
+    assert "--connect-timeout" in src  # fail-fast download
+
+
+def _assert_posix_clean(rel: str) -> str:
+    import subprocess
+    path = Path(__file__).resolve().parents[1] / rel
+    src = path.read_text()
+    assert "$'" not in src  # no bashisms: runs under POSIX sh
+    proc = subprocess.run(["sh", "-n", str(path)],
+                          capture_output=True, text=True, timeout=30)
+    assert proc.returncode == 0, f"{rel} fails sh -n: {proc.stderr}"
+    return src
 
 
 def test_gzip_magic_check_matches_bsd_od(tmp_path):
