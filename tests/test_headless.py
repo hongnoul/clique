@@ -78,7 +78,8 @@ async def afetch(base: str, path: str) -> tuple[str, str]:
 
 async def test_index_menu_lists_all_flows(headless_server):
     body, _ = await afetch(headless_server, "/")
-    for needle in ("/dash.txt", "/tui.py", "/join.sh"):
+    for needle in ("/dash.txt", "/tui.py", "/join.sh", "/repo.bundle",
+                   "clique onboard --dry"):
         assert needle in body, f"menu missing {needle}"
     # no-GitHub flow: join needs no PAT, source comes from /app.tgz
     assert "no token needed" in body
@@ -117,6 +118,7 @@ async def test_join_sh_pins_server(headless_server, tmp_path):
     assert headless_server in body
     # no-GitHub flow: bundle comes from /app.tgz, no git prompts or PATs
     assert "app.tgz" in body
+    assert "clique onboard" in body  # graceful path advertised after install
     assert "CLIQUE_GITHUB_TOKEN" not in body
     assert "GIT_TERMINAL_PROMPT" not in body
     assert body.startswith("#!/bin/sh")
@@ -130,6 +132,70 @@ async def test_join_sh_pins_server(headless_server, tmp_path):
         subprocess.run, ["sh", "-n", str(script)],
         capture_output=True, text=True, timeout=30)
     assert proc.returncode == 0, f"served join.sh fails sh -n: {proc.stderr}"
+
+
+async def test_clique_reports_protocol_and_sha(headless_server):
+    import json as _json
+    import urllib.request as _url
+
+    def _do() -> dict:
+        with _url.urlopen(headless_server + "/v1/clique", timeout=10) as r:
+            return _json.loads(r.read().decode())
+
+    info = await asyncio.to_thread(_do)
+    from common import protocol as _proto
+    assert info["protocol_version"] == _proto.PROTOCOL_VERSION
+    assert isinstance(info.get("server_sha"), str) and info["server_sha"]
+
+
+async def test_repo_bundle_serves_git_history(headless_server):
+    import urllib.request as _url
+
+    def _do() -> tuple[bytes, str]:
+        with _url.urlopen(headless_server + "/repo.bundle", timeout=60) as r:
+            return r.read(), r.headers.get("content-type", "")
+
+    blob, ctype = await asyncio.to_thread(_do)
+    assert len(blob) > 1000
+    # git bundle v2/v3 header, or gzip fallback (tarball snapshot)
+    assert blob.startswith(b"# v") or blob[:2] == b"\x1f\x8b", blob[:40]
+
+
+def test_detect_runtime_prefers_live_backend():
+    from client.cli import _detect_runtime
+
+    def fake_get(path, base=None, timeout=5.0):
+        if base == "http://127.0.0.1:11434/v1":
+            return {"data": [{"id": "qwen2.5-coder:7b"}]}
+        return None
+
+    rt, bu, mn = _detect_runtime(None, None, fake_get)
+    assert (rt, bu, mn) == ("openai-compat", "http://127.0.0.1:11434/v1",
+                            "qwen2.5-coder:7b")
+    rt2, _, _ = _detect_runtime(None, None, lambda *a, **k: None)
+    assert rt2 == "echo"
+
+
+async def test_onboard_dry_run_and_unreachable(headless_server, capsys):
+    from typer.testing import CliRunner
+
+    from client.cli import app
+
+    ok = await asyncio.to_thread(
+        CliRunner().invoke, app,
+        ["onboard", "--server", headless_server, "--runtime", "echo",
+         "--dry"],
+    )
+    assert ok.exit_code == 0, ok.output
+    assert "server ok" in ok.output
+
+    bad = await asyncio.to_thread(
+        CliRunner().invoke, app,
+        ["onboard", "--server", "http://127.0.0.1:1", "--runtime", "echo",
+         "--dry"],
+    )
+    assert bad.exit_code == 1
+    assert "unreachable" in bad.output
 
 
 def test_bootstrap_sh_is_posix_clean():

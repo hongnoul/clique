@@ -237,6 +237,7 @@ def main() -> None:
     parser.add_argument("--name", help="override display name")
     parser.add_argument("--runtime", choices=["echo", "openai-compat"])
     parser.add_argument("--model-name", help="openai-compat model name, e.g. qwen2.5-coder:7b")
+    parser.add_argument("--base-url", help="openai-compat base URL, e.g. http://127.0.0.1:11434/v1")
     parser.add_argument("--param-b", type=float, help="model size in B params (routing)")
     parser.add_argument("--parallel-slots", type=int,
                         help="concurrent tasks the runtime can batch (vLLM: 8+)")
@@ -251,6 +252,8 @@ def main() -> None:
     if args.model_name:
         config.node.openai_model_name = args.model_name
         config.node.model_family = args.model_name.split(":")[0]
+    if args.base_url:
+        config.node.openai_base_url = args.base_url
     if args.param_b:
         config.node.model_parameter_b = args.param_b
     if args.parallel_slots:

@@ -57,6 +57,23 @@ from scheduler.workspace import WorkspaceService
 log = logging.getLogger("clique.server")
 
 
+def _server_sha() -> str:
+    """Short git SHA of the running server tree (mismatch detection).
+
+    Best-effort: returns "unknown" when git is unavailable (tarball
+    installs) so the field is always present but never blocks."""
+    import subprocess
+    from pathlib import Path
+    with contextlib.suppress(Exception):
+        root = Path(__file__).resolve().parents[1]
+        sha = subprocess.check_output(
+            ["git", "-C", str(root), "rev-parse", "--short", "HEAD"],
+            timeout=5, stderr=subprocess.DEVNULL).decode().strip()
+        if sha:
+            return sha
+    return "unknown"
+
+
 _JOIN_SH_TEMPLATE = """#!/bin/sh
 # clique join: one line, no token, no GitHub, no ssh key.
 #   curl -fsSL __CLIQUE_SERVER__/join.sh | sh
@@ -102,7 +119,9 @@ for cmd in clique clique-agent clique-server; do
 done
 export CLIQUE_SERVER
 echo "installed: $BIN_DIR/clique (server: $CLIQUE_SERVER)"
-echo "join now:  clique join --server $CLIQUE_SERVER --runtime echo --param-b 7"
+echo "check:     clique onboard --server $CLIQUE_SERVER --dry"
+echo "join:      clique onboard --server $CLIQUE_SERVER"
+echo "(or manual: clique join --server $CLIQUE_SERVER --runtime echo --param-b 7)"
 """
 
 
@@ -346,7 +365,9 @@ class SchedulerServer:
                     "default_model": self.config.server.default_model,
                     "policy": self.permissions.policy,
                     "clusters": [c.model_dump(mode="json")
-                                 for c in self.registry.list_clusters()]}
+                                 for c in self.registry.list_clusters()],
+                    "protocol_version": protocol.PROTOCOL_VERSION,
+                    "server_sha": _server_sha()}
 
         @app.get("/v1/stats")
         async def stats() -> dict:
@@ -365,10 +386,16 @@ class SchedulerServer:
             return (
                 f"join this clique (one line, no token needed):\n"
                 f"  curl -fsSL {base}/join.sh | sh\n"
+                f"then onboard gracefully (probes server, detects runtime):\n"
+                f"  export CLIQUE_SERVER={base}\n"
+                f"  clique onboard --dry   # check first\n"
+                f"  clique onboard         # join with detected runtime\n"
                 f"or without installing anything:\n"
                 f"  curl -fsSL {base}/tui.py | python3 - --server "
                 f"{base}\n"
                 f"snapshot:  curl -s {base}/dash.txt\n"
+                f"git-local: curl -s {base}/repo.bundle -o /tmp/tcj.bundle "
+                f"&& git clone /tmp/tcj.bundle ~/tcj\n"
             )
 
         @app.get("/dash.txt", response_class=PlainTextResponse)
@@ -433,6 +460,31 @@ class SchedulerServer:
             return _Response(content=blob, media_type="application/gzip",
                              headers={"Content-Disposition":
                                       'attachment; filename="clique-app.tgz"'})
+
+        @app.get("/repo.bundle")
+        async def repo_bundle():
+            """Full git bundle of the server tree (history included).
+
+            Lets a teammate's box become a git remote without GitHub:
+            ``curl $SERVER/repo.bundle -o /tmp/tcj.bundle &&
+            git clone /tmp/tcj.bundle ~/tcj``. Falls back to /app.tgz
+            content (snapshot, no history) when git is unavailable."""
+            import subprocess as _sp
+            from fastapi.responses import Response as _Response
+            from pathlib import Path as _Path
+
+            root = _Path(__file__).resolve().parents[1]
+            blob: bytes | None = None
+            with contextlib.suppress(Exception):
+                import subprocess as _sub
+                blob = _sp.check_output(
+                    ["git", "-C", str(root), "bundle", "create", "-",
+                     "--all"], timeout=60, stderr=_sub.DEVNULL)
+            if blob is None:
+                return await app_tgz()
+            return _Response(content=blob, media_type="application/octet-stream",
+                             headers={"Content-Disposition":
+                                      'attachment; filename="clique-tcj.bundle"'})
 
         @app.get("/tui.py", response_class=PlainTextResponse)
         async def tui_py() -> str:

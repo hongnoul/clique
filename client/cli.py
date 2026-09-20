@@ -775,6 +775,115 @@ def join_remote(host: str = typer.Argument(..., help="ssh target, e.g. gx10 or u
                   f"'clique join --server {srv} --runtime echo --param-b 7'")
 
 
+@app.command()
+def onboard(server: str = typer.Option(None, help="clique server URL (or $CLIQUE_SERVER)"),
+            runtime: str = typer.Option(None, help="echo | openai-compat (auto-detected if omitted)"),
+            model_name: str = typer.Option(None, help="openai-compat model, e.g. qwen2.5-coder:7b"),
+            base_url: str = typer.Option(None, help="openai-compat base URL, e.g. http://127.0.0.1:11434/v1"),
+            param_b: float = typer.Option(None, help="model size in B params"),
+            parallel_slots: int = typer.Option(None, help="concurrent tasks the runtime can batch (vLLM: 8+)"),
+            dry: bool = typer.Option(False, "--dry", help="print what would happen, do not join")) -> None:
+    """Graceful dogfood onboarding: probe server, detect runtime, warn on mismatch, join.
+
+    1. Probes $SERVER/v1/clique (reachability + protocol_version + server_sha).
+    2. Auto-detects a local runtime when --runtime is omitted: probes
+       --base-url (or ollama :11434, then llama-server :8080) /v1/models.
+    3. Warns (never blocks) when the local checkout SHA differs from
+       server_sha, so mixed-version dogfood nodes are visible.
+    4. Joins with the resolved runtime via ``clique join``.
+    """
+    import json as _json
+    import os as _os
+    import urllib.request as _url
+    srv = server or _os.environ.get("CLIQUE_SERVER")
+    if not srv:
+        raise typer.BadParameter("pass --server or set CLIQUE_SERVER")
+    srv = srv if srv.startswith("http") else f"http://{srv}"
+
+    def _get(path: str, base: str = srv, timeout: float = 5.0) -> dict | None:
+        try:
+            with _url.urlopen(base + path, timeout=timeout) as r:
+                return _json.loads(r.read().decode())
+        except Exception:
+            return None
+
+    info = _get("/v1/clique")
+    if info is None:
+        console.print(f"[red]server unreachable[/]: {srv}/v1/clique timed out.\n"
+                      f"Check tailscale/VPN, then retry.")
+        raise typer.Exit(1)
+    from common import protocol as _proto
+    sproto = info.get("protocol_version")
+    if sproto is not None and sproto != _proto.PROTOCOL_VERSION:
+        console.print(f"[yellow]warn[/]: server protocol={sproto} "
+                      f"!= local protocol={_proto.PROTOCOL_VERSION}. "
+                      f"Update from {srv}/app.tgz if tasks fail.")
+    ssha = info.get("server_sha")
+    local_sha = _local_sha()
+    if ssha and local_sha and ssha not in ("unknown",) and local_sha != ssha:
+        console.print(f"[yellow]warn[/]: server tree {ssha} != local {local_sha}. "
+                      f"Graceful mode: joining anyway; refresh with "
+                      f"`curl -fsSL {srv}/app.tgz` if behavior drifts.")
+    console.print(f"[green]server ok[/]: {info.get('name')} "
+                  f"(protocol={sproto}, sha={ssha})")
+
+    rt = runtime
+    bu = base_url
+    mn = model_name
+    if rt is None:
+        rt, bu, mn = _detect_runtime(bu, mn, _get)
+        console.print(f"[dim]detected runtime: {rt}"
+                      f"{f' {mn}' if mn else ''}"
+                      f"{f' @ {bu}' if bu else ''}[/]")
+    if rt == "openai-compat" and not (bu and mn):
+        console.print("[red]openai-compat needs --base-url and --model-name[/] "
+                      "(or a live ollama/llama-server to auto-detect).")
+        raise typer.Exit(2)
+    console.print(f"joining {srv} as [bold]{rt}[/]"
+                  f"{f' (slots={parallel_slots})' if parallel_slots else ''}...")
+    if dry:
+        console.print("[dim]--dry: not joining[/]")
+        return
+    join(server=srv, runtime=rt, model_name=mn, base_url=bu,
+         param_b=param_b, parallel_slots=parallel_slots)
+
+
+def _local_sha() -> str | None:
+    """Short SHA of the local checkout, or None when unavailable."""
+    import contextlib as _cl
+    import subprocess as _sp
+    from pathlib import Path as _Path
+    with _cl.suppress(Exception):
+        root = _Path(__file__).resolve().parents[1]
+        sha = _sp.check_output(
+            ["git", "-C", str(root), "rev-parse", "--short", "HEAD"],
+            timeout=5, stderr=_sp.DEVNULL).decode().strip()
+        if sha:
+            return sha
+    return None
+
+
+def _detect_runtime(base_url: str | None, model_name: str | None,
+                    get) -> tuple[str, str | None, str | None]:
+    """Pick echo vs openai-compat by probing local /v1/models endpoints."""
+    candidates = ([base_url] if base_url else []) + [
+        "http://127.0.0.1:11434/v1",  # ollama
+        "http://127.0.0.1:8080/v1",   # llama-server
+    ]
+    for bu in candidates:
+        models = get("/models", base=bu, timeout=2.0)
+        if isinstance(models, dict):
+            data = models.get("data") or []
+            name = model_name
+            if name is None and data and isinstance(data[0], dict):
+                name = data[0].get("id")
+            if name:
+                return "openai-compat", bu, name
+            if model_name:
+                return "openai-compat", bu, model_name
+    return "echo", None, None
+
+
 def main() -> None:
     app()
 
