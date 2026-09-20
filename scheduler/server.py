@@ -753,6 +753,8 @@ class SchedulerServer:
                     topic=f"session:{view.request.session_id}")
         elif mtype == protocol.TOOL_CALL:
             from scheduler.tool_executor import execute_tool
+            log.info("tool_call task=%s name=%s",
+                     msg.get("task_id", "")[:10], msg.get("name", ""))
             ok, result = await execute_tool(
                 self, msg.get("task_id", ""), msg.get("name", ""),
                 msg.get("arguments", {}))
