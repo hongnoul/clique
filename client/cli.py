@@ -730,7 +730,7 @@ def workspace(list: bool = typer.Option(False, "--list", help="list workspaces")
                 t = ev.get("type", "?")
                 if t == "workspace.snapshot":
                     console.print(f"[dim]snapshot seq={ev['seq']} files="
-                                  f"{list(ev.get('files', {}))}[/]")
+                                  f"{sorted(ev.get('files', {}))}[/]")
                 elif t == "workspace.delta":
                     rb = " [yellow]rebased[/]" if ev.get("rebased") else ""
                     console.print(f"seq={ev['seq']} {ev['path']}"
@@ -742,7 +742,7 @@ def workspace(list: bool = typer.Option(False, "--list", help="list workspaces")
             bundle = await client.workspace_export(
                 export, paths=[file] if file else None)
             console.print(f"[dim]workspace {export} seq={bundle['seq']}"
-                          f" files={list(bundle['files'])}[/]")
+                          f" files={sorted(bundle['files'])}[/]")
             for p, text in bundle["files"].items():
                 console.print(f"[bold]--- {p} ---[/]\n{text}")
             for c in bundle.get("commits", [])[:5]:
