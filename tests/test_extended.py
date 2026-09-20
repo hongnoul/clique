@@ -403,11 +403,59 @@ async def test_web_dashboard_served(clique):
     base, _, _ = clique
     async with httpx.AsyncClient() as c:
         r = await c.get(base + "/dash")
+        assets = await c.get(base + "/assets/base.css")
+        chrome = await c.get(base + "/assets/chrome.js")
     assert r.status_code == 200
     assert "clique dashboard" in r.text
     # click-to-watch live output must be wired, not orphan markup
     for needle in ("watchTask", "/ws/tasks/", "liveOut", "stopWatch"):
         assert needle in r.text, f"dashboard missing {needle}"
+    # shared chrome is linked, not inlined per page
+    assert assets.status_code == 200 and "--accent" in assets.text
+    assert chrome.status_code == 200 and "applyTheme" in chrome.text
+    assert "/chat" in r.text  # menu links to the chat page (notes stub gone)
+    assert "Notes" not in r.text
+
+
+@pytest.mark.asyncio
+async def test_web_chat_page_served(clique):
+    base, _, _ = clique
+    async with httpx.AsyncClient() as c:
+        r = await c.get(base + "/chat")
+    assert r.status_code == 200
+    assert "clique chat" in r.text
+    # the page must drive the same path as `clique submit`
+    for needle in ("/v1/chat/sessions", "/v1/tasks", "/ws/tasks/",
+                   "/ws/sessions/", "idempotency_key"):
+        assert needle in r.text, f"chat page missing {needle}"
+
+
+@pytest.mark.asyncio
+async def test_browser_chat_session_roundtrip(clique):
+    """The web chat opens/closes sessions without a node keypair, and a
+    turn through one lands in the transcript the page renders."""
+    base, _, _ = clique
+    async with httpx.AsyncClient() as c:
+        sid = (await c.post(base + "/v1/chat/sessions",
+                            json={"cluster_key": "echo-7b-none"})
+               ).json()["session_id"]
+        assert sid.startswith("s-")
+
+        req = TaskRequest(prompt="hi from the browser", session_id=sid,
+                          idempotency_key=uuid.uuid4().hex)
+        tid = (await c.post(base + "/v1/tasks",
+                            json=req.model_dump(mode="json"))).json()["task_id"]
+        assert (await wait_done(base, tid))["state"] == "succeeded"
+
+        detail = (await c.get(f"{base}/v1/sessions/{sid}")).json()
+        assert [t["role"] for t in json.loads(detail["context"])] == \
+            ["user", "assistant"]
+
+        assert (await c.delete(f"{base}/v1/chat/sessions/{sid}")).json()["closed"]
+        active = (await c.get(base + "/v1/sessions")).json()
+        assert sid not in [s["session_id"] for s in active]
+        r = await c.delete(f"{base}/v1/chat/sessions/s-nope")
+        assert r.status_code == 404
 
 
 # -------------------------------------------------------------------- sdk auth

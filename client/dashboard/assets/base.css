@@ -1,0 +1,65 @@
+/* Shared chrome for the web pages served by the server node (/dash and
+   /chat): theme tokens, typography, cards, tables, header + menu. Page
+   specific layout stays inline in each page. */
+
+:root {
+  --accent: #6855ff;
+  --bg: #0d1117; --fg: #c9d1d9; --card-bg: #161b22; --border: #30363d;
+  --link: #58a6ff; --muted: #8b949e; --hover-bg: #21262d;
+  color-scheme: dark;
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --bg: #f6f8fa; --fg: #24292f; --card-bg: #ffffff; --border: #d0d7de;
+    --link: #0969da; --muted: #57606a; --hover-bg: #eef1f4;
+    color-scheme: light;
+  }
+}
+:root[data-theme="light"] {
+  --bg: #f6f8fa; --fg: #24292f; --card-bg: #ffffff; --border: #d0d7de;
+  --link: #0969da; --muted: #57606a; --hover-bg: #eef1f4;
+  color-scheme: light;
+}
+
+html, body { height: 100%; }
+body { font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+       background: var(--bg); color: var(--fg); margin: 0; padding: 1rem;
+       box-sizing: border-box; transition: background .15s, color .15s;
+       display: flex; flex-direction: column; }
+h2 { font-size: .95rem; color: var(--accent); margin: 0 0 .5rem; }
+.card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 0;
+        padding: .8rem 1rem; }
+table { border-collapse: collapse; width: 100%; font-size: .8rem; }
+th, td { text-align: left; padding: .25rem .5rem; border-bottom: 1px solid var(--border); }
+th { color: var(--accent); }
+.badge { padding: 0 .4em; border-radius: 0; font-size: .75rem; color: #fff; }
+.ready { background: #1f6f3f; } .busy { background: #9e6a03; }
+.offline { background: #6e1f1f; } .joining { background: #30363d; }
+.muted { color: var(--muted); }
+
+/* header: logo top-left (larger; it already says "clique"), menu top-right */
+header { display: flex; align-items: center; justify-content: space-between;
+         gap: .8rem; margin-bottom: 1.4rem; padding: .3rem 0; position: relative;
+         flex: none; }
+.brand { display: flex; align-items: center; color: var(--fg); }
+#logo { height: 96px; display: block; }
+#logo svg { height: 100%; width: auto; display: block; }
+.header-actions { display: flex; align-items: center; gap: .5rem; position: relative; }
+
+.icon-btn { background: var(--card-bg); border: 1px solid var(--border); color: var(--fg);
+            border-radius: 0; padding: .55rem .9rem; font-size: 1.3rem;
+            cursor: pointer; line-height: 1; }
+.icon-btn:hover { border-color: var(--accent); color: var(--accent); }
+#themeBtn svg { height: 1.15rem; width: auto; display: block; }
+.menu-panel { position: absolute; top: calc(100% + .4rem); right: 0;
+              background: var(--card-bg); border: 1px solid var(--border); border-radius: 0;
+              min-width: 160px; padding: .3rem; box-shadow: 0 8px 24px rgba(0,0,0,.4);
+              z-index: 10; }
+.menu-panel[hidden] { display: none; }
+.menu-item { display: flex; align-items: center; justify-content: space-between;
+             gap: .5rem; padding: .45rem .6rem; border-radius: 0; font-size: .85rem;
+             color: var(--fg); text-decoration: none; }
+.menu-item[aria-disabled="true"] { color: var(--muted); cursor: default; }
+.menu-item:not([aria-disabled="true"]):hover { background: var(--hover-bg); }
+.soon { font-size: .65rem; border: 1px solid var(--border); border-radius: 0;
+        padding: 0 .35rem; color: var(--muted); }
