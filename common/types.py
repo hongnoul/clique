@@ -63,6 +63,7 @@ class ModelSpec(BaseModel):
     artifact_hash: str | None = None
     context_window: int = 8192
     runtime: str = "echo"  # "echo" | "openai-compat"
+    parallel_slots: int = 1  # concurrent tasks this node's runtime can batch (vLLM > 1)
     capabilities: list[TaskType] = Field(default_factory=lambda: [TaskType.CHAT])
 
     def cluster_key(self) -> str:

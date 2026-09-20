@@ -37,7 +37,8 @@ class NodeAgent:
         self.model = spec_from_config(config.node)
         self.node_id = ""
         self.token = ""
-        self.current_task_id: str | None = None
+        self.current_task_id: str | None = None  # legacy: one of the running ids
+        self.running: dict[str, asyncio.Task] = {}  # task_id -> job
         self._stop = asyncio.Event()
         self._task_job: asyncio.Task | None = None
         self._ws = None
@@ -104,17 +105,20 @@ class NodeAgent:
                 if msg["type"] == protocol.ASSIGN:
                     assignment = TaskAssignment.model_validate(msg["assignment"])
                     request = TaskRequest.model_validate(msg["request"])
-                    if self.current_task_id is not None:
+                    slots = self.model.parallel_slots or 1
+                    if len(self.running) >= slots:
                         await ws.send(protocol.dumps(protocol.msg_result(TaskResult(
                             task_id=assignment.task_id, attempt_id=assignment.attempt_id,
                             state=TaskState.FAILED, error="node busy (race)"))))
                         continue
+                    job = asyncio.create_task(self._execute(ws, assignment, request))
+                    self.running[assignment.task_id] = job
                     self.current_task_id = assignment.task_id
-                    self._task_job = asyncio.create_task(
-                        self._execute(ws, assignment, request))
+                    self._task_job = job
                 elif msg["type"] == protocol.REVOKE:
-                    if msg["task_id"] == self.current_task_id:
-                        await self.runtime.cancel()
+                    job = self.running.get(msg["task_id"])
+                    if job is not None:
+                        job.cancel()
                 elif msg["type"] == protocol.SHUTDOWN:
                     log.info("server is shutting down (%s); disconnecting",
                              msg.get("reason", ""))
@@ -139,7 +143,8 @@ class NodeAgent:
         except asyncio.CancelledError:
             # abrupt kill: report nothing; the server's lease/heartbeat
             # machinery will requeue this attempt elsewhere
-            self.current_task_id = None
+            self.running.pop(assignment.task_id, None)
+            self.current_task_id = next(iter(self.running), None)
             raise
         except Exception as e:
             state, error = TaskState.FAILED, str(e)
@@ -154,11 +159,13 @@ class NodeAgent:
                 wall_time_s=time.monotonic() - start)
             with contextlib.suppress(Exception):
                 await ws.send(protocol.dumps(protocol.msg_result(result)))
-            self.current_task_id = None
+            self.running.pop(assignment.task_id, None)
+            self.current_task_id = next(iter(self.running), None)
 
     async def _heartbeat_loop(self, ws) -> None:
         while True:
-            status = NodeStatus.BUSY if self.current_task_id else NodeStatus.READY
+            slots = self.model.parallel_slots or 1
+            status = NodeStatus.BUSY if len(self.running) >= slots else NodeStatus.READY
             await ws.send(protocol.dumps(protocol.msg_heartbeat(
                 status.value, res.probe(), self.current_task_id, self.model)))
             await asyncio.sleep(self.config.node.heartbeat_interval_s)
@@ -212,6 +219,8 @@ def main() -> None:
     parser.add_argument("--runtime", choices=["echo", "openai-compat"])
     parser.add_argument("--model-name", help="openai-compat model name, e.g. qwen2.5-coder:7b")
     parser.add_argument("--param-b", type=float, help="model size in B params (routing)")
+    parser.add_argument("--parallel-slots", type=int,
+                        help="concurrent tasks the runtime can batch (vLLM: 8+)")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO)
@@ -225,6 +234,8 @@ def main() -> None:
         config.node.model_family = args.model_name.split(":")[0]
     if args.param_b:
         config.node.model_parameter_b = args.param_b
+    if args.parallel_slots:
+        config.node.parallel_slots = args.parallel_slots
 
     async def run() -> None:
         server_url = await resolve_server(args.server)
