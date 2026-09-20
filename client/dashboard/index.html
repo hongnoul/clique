@@ -40,6 +40,10 @@
   .offline { background: #6e1f1f; } .joining { background: #30363d; }
   .op { color: #8250df; } .owner { color: #bc4c00; }
   .muted { color: var(--muted); }
+  #liveOut { max-height: 16rem; overflow-y: auto; font-size: .78rem;
+             white-space: pre-wrap; word-break: break-word; }
+  tr.live { cursor: pointer; } tr.live:hover td { background: var(--card-bg); }
+  tr.watching td { background: rgba(63, 185, 80, .12); }
 
   /* header: logo top-left (larger; it already says "clique"), menu top-right */
   header { display: flex; align-items: center; justify-content: space-between;
@@ -121,7 +125,11 @@
       tasks completed, last 100</span></h2><div id="leaderboard"></div></div>
   </div>
   <div class="col-right">
-    <div class="card"><h2>QUEUE</h2><div id="tasks"></div></div>
+    <div class="card"><h2>QUEUE</h2><div id="tasks"></div>
+      <span class="muted" style="font-size:.7rem">click a running task to
+      watch its live output</span></div>
+    <div class="card"><h2>LIVE OUTPUT <span id="liveTask" class="muted"></span></h2>
+      <div id="liveOut"><span class="muted">no task watched</span></div></div>
   </div>
 </div>
 
@@ -185,6 +193,47 @@ async function refresh() {
       : '<span class="muted">none active</span>';
     $('leaderboard').innerHTML = renderLeaderboard(tasks, nodesById);
   } catch (e) { console.error(e); }
+}
+
+// --- click-to-watch live task output over /ws/tasks/{id} ---
+let watching = null;
+let watchWs = null;
+
+function showLive(text) {
+  $('liveOut').textContent = text;
+}
+
+async function watchTask(taskId) {
+  stopWatch();
+  watching = taskId;
+  $('liveTask').textContent = `· watching ${taskId.slice(0, 10)}`;
+  showLive('connecting...');
+  try {
+    const cur = await j(`/v1/tasks/${taskId}`);
+    showLive(cur.partial_output
+      || (cur.result && cur.result.output) || '(no output yet)');
+  } catch (e) { showLive(`(fetch failed: ${e})`); return; }
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  const ws = new WebSocket(`${proto}://${location.host}/ws/tasks/${taskId}`);
+  watchWs = ws;
+  ws.onmessage = async () => {
+    try {
+      const now = await j(`/v1/tasks/${taskId}`);
+      showLive(now.partial_output
+        || (now.result && now.result.output) || $('liveOut').textContent);
+    } catch (e) { /* keep last text on transient failure */ }
+  };
+  ws.onclose = () => {
+    if (watchWs !== ws) return;
+    $('liveTask').textContent += ' (done)';
+    watchWs = null;
+  };
+}
+
+function stopWatch(suffix = '') {
+  if (watchWs) { const ws = watchWs; watchWs = null; ws.close(); }
+  if (suffix && watching) $('liveTask').textContent += suffix;
+  watching = null;
 }
 
 // --- light/dark theme: explicit choice persists; otherwise follows the OS ---
