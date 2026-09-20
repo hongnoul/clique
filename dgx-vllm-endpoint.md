@@ -53,3 +53,14 @@ Notes:
 - `vllm` docker container: `--restart unless-stopped`.
 - `clique-server.service` and `clique-node.service` installed and enabled on gx10 (systemd). Node unit waits for vLLM readiness before joining, so the full stack self-assembles after reboot.
 - Verified: systemd-managed stack served a clique submit end-to-end (0.6s).
+
+## Parallel slots (2026-09-19): clique now exploits vLLM batching
+Closing the loop end-to-end exposed that the router's one-task-per-node policy
+serialized everything: 8 concurrent clique submits took 79.7s even though raw
+vLLM did the same work in ~12s. Added `parallel_slots` (ModelSpec/config/CLI
+`--parallel-slots`) with slot-aware scheduling in the router and a multi-task
+agent. gx10 node runs with 16 slots.
+
+Measured through the full clique pipeline (submit -> route -> vLLM -> stream -> commit):
+- 8 concurrent submits: 79.7s -> 27.9s (ok 8/8)
+- 16 concurrent submits: 53.1s, ok 16/16 (single node)

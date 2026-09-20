@@ -249,3 +249,38 @@ async def test_linked_task_result_flushes_workspace(tmp_path):
     assert ws.dirty is False
     commits = server.live_workspaces.git_history("w1")
     assert any("live checkpoint" in c["message"] for c in commits)
+
+
+def test_code_task_embeds_live_files(tmp_path):
+    from common.types import TaskType
+    server = make_server(tmp_path)
+    server.live_workspaces.create("w1", {"m.py": "LIVE\n"})
+    req = TaskRequest(prompt="fix", idempotency_key="k1", workspace_id="w1",
+                      task_type=TaskType.CODE_EDIT,
+                      code={"files": {"m.py": "STALE\n"},
+                            "test_cmd": ["pytest", "-q"]})
+    asyncio.run(server.submit_task(req))
+    view = server.router.get_task(req.task_id)
+    assert "LIVE" in view.request.prompt
+    assert "STALE" not in view.request.prompt
+
+
+def test_ws_patch_requires_auth(tmp_path):
+    server = make_server(tmp_path)
+    client = TestClient(server.app)
+    server.tokens["tok"] = "n1"
+    server.live_workspaces.create("w1", {"m.py": "x\n"})
+    with client.websocket_connect("/ws/workspace/w1") as anon:
+        anon.receive_text()
+        anon.send_text(json.dumps({
+            "type": "workspace.patch", "path": "m.py", "base_version": 1,
+            "ops": [{"op": "insert", "line": 2, "text": "y\n"}]}))
+        err = json.loads(anon.receive_text())
+        assert err["type"] == "workspace.error"
+    with client.websocket_connect("/ws/workspace/w1?token=tok") as authed:
+        authed.receive_text()
+        authed.send_text(json.dumps({
+            "type": "workspace.patch", "path": "m.py", "base_version": 1,
+            "ops": [{"op": "insert", "line": 2, "text": "y\n"}]}))
+        d = json.loads(authed.receive_text())
+        assert d["seq"] == 2

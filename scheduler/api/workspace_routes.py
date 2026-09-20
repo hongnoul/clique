@@ -1,5 +1,15 @@
 """Workspace realtime routes: /ws/workspace/{id} + REST CRUD.
 
+Auth split (deliberate, LAN demo):
+- Reads are open: GET /v1/workspaces*, WS snapshot/sync/delta/presence.
+  Any viewer on the LAN can watch collab without a token.
+- Writes are gated: POST /v1/workspaces, POST .../flush require
+  ``Authorization: Bearer`` (see rest._actor, 401 otherwise).
+- WS patches carry an optional ``?token=``: resolved to node_id when
+  present, else attributed as ``anon-<id>`` for the demo screen.
+  Do not add a WS handshake here: the realtime loop is owned by the
+  collab optimizer agent; standardize on ``?token=`` optional.
+
 WS protocol (JSON, same shape as agent channel):
   client -> server:
     {"type": "workspace.patch", "path, "base_version", "ops", "actor"}
@@ -50,6 +60,7 @@ def register_workspace_routes(app: "FastAPI", server: "SchedulerServer") -> None
             return
         await ws.accept()
         actor = _actor_ws(server, ws)
+        authed = actor in server.tokens.values()
         topic = f"workspace:{workspace_id}"
         key, q = server.events.subscribe(topic)
         # send initial snapshot so the joiner has head versions
@@ -75,6 +86,12 @@ def register_workspace_routes(app: "FastAPI", server: "SchedulerServer") -> None
                 msg = protocol.loads(raw)
                 mtype = msg.get("type")
                 if mtype == protocol.WS_PATCH:
+                    if not authed:
+                        await ws.send_text(protocol.dumps({
+                            "type": "workspace.error",
+                            "workspace_id": workspace_id,
+                            "error": "auth required: connect with ?token="}))
+                        continue
                     try:
                         event = await server.apply_workspace_patch(
                             workspace_id, msg["path"],

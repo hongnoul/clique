@@ -35,6 +35,9 @@ console = Console()
 
 
 def _resolve(server: str | None) -> CliqueClient:
+    import os
+    if not server:
+        server = os.environ.get("CLIQUE_SERVER")
     if server:
         url = server if server.startswith("http") else f"http://{server}"
         return CliqueClient(url)
@@ -98,7 +101,9 @@ def join(server: str = typer.Option(None, help="server URL, skips mDNS"),
          name: str = typer.Option(None, help="display name, defaults to hostname"),
          runtime: str = typer.Option(None, help="echo | openai-compat"),
          model_name: str = typer.Option(None, help="e.g. qwen2.5-coder:7b"),
+         base_url: str = typer.Option(None, help="openai-compat base URL, e.g. http://127.0.0.1:11434/v1"),
          param_b: float = typer.Option(None, help="model size in B params"),
+         active_param_b: float = typer.Option(None, help="active params in B (MoE)"),
          parallel_slots: int = typer.Option(None, help="concurrent tasks the runtime can batch (vLLM: 8+)"),
          foreground: bool = typer.Option(
              False, "--foreground", "-f",
@@ -118,6 +123,10 @@ def join(server: str = typer.Option(None, help="server URL, skips mDNS"),
         extra += ["--model-name", model_name]
     if param_b:
         extra += ["--param-b", str(param_b)]
+    if active_param_b:
+        extra += ["--active-param-b", str(active_param_b)]
+    if base_url:
+        extra += ["--base-url", base_url]
     if parallel_slots:
         extra += ["--parallel-slots", str(parallel_slots)]
 

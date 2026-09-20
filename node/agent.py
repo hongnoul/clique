@@ -39,7 +39,6 @@ class NodeAgent:
         self.token = ""
         self.current_task_id: str | None = None  # legacy: one of the running ids
         self.running: dict[str, asyncio.Task] = {}  # task_id -> job
-        self.current_task_id: str | None = None
         self.workspace_seq: int = 0  # latest live workspace seq seen
         self.workspace_paths: list[str] = []  # paths touched since task start
         self._stop = asyncio.Event()

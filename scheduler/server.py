@@ -57,6 +57,55 @@ from scheduler.workspace import WorkspaceService
 log = logging.getLogger("clique.server")
 
 
+_JOIN_SH_TEMPLATE = """#!/bin/sh
+# clique join: one line, no token, no GitHub, no ssh key.
+#   curl -fsSL __CLIQUE_SERVER__/join.sh | sh
+# Source comes from __CLIQUE_SERVER__/app.tgz (this server's own tree).
+# Clique auth happens after install via signed registration
+# (node keypair -> bearer token), never as a pasted secret.
+set -eu
+CLIQUE_SERVER="__CLIQUE_SERVER__"
+INSTALL_DIR="${CLIQUE_HOME:-$HOME/.clique/app}"
+BIN_DIR="${CLIQUE_BIN:-$HOME/.local/bin}"
+PY=""
+for cand in python3.13 python3.12 python3.11 python3; do
+    if command -v "$cand" >/dev/null 2>&1; then
+        if "$cand" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3,11) else 1)'; then
+            PY="$cand"; break
+        fi
+    fi
+done
+[ -n "$PY" ] || { echo "error: python 3.11+ required"; exit 1; }
+command -v curl >/dev/null 2>&1 || { echo "error: curl not found"; exit 1; }
+command -v tar >/dev/null 2>&1 || { echo "error: tar not found"; exit 1; }
+case "$INSTALL_DIR" in ""|"/"|"$HOME"|"$HOME/") echo "error: refusing to unpack into '$INSTALL_DIR'"; exit 1;; esac
+tmpfile="${TMPDIR:-/tmp}/clique-app-$$.tgz"
+rm -f "$tmpfile"
+curl -fsSL --max-time 120 "$CLIQUE_SERVER/app.tgz" -o "$tmpfile"
+if ! head -c 2 "$tmpfile" | od -An -tx1 | grep -q "1f 8b"; then
+    echo "error: app bundle is not gzip (wrong server?)"
+    head -c 300 "$tmpfile" | tr -d '\\0' | head -n 5 || true
+    rm -f "$tmpfile"
+    exit 1
+fi
+rm -rf "$INSTALL_DIR"
+mkdir -p "$INSTALL_DIR"
+tar -xz -C "$INSTALL_DIR" -f "$tmpfile"
+rm -f "$tmpfile"
+[ -f "$INSTALL_DIR/pyproject.toml" ] || { echo "error: bundle is not a clique checkout"; exit 1; }
+"$PY" -m venv "$INSTALL_DIR/.venv"
+"$INSTALL_DIR/.venv/bin/pip" install -q -U pip
+"$INSTALL_DIR/.venv/bin/pip" install -q -e "$INSTALL_DIR"
+mkdir -p "$BIN_DIR"
+for cmd in clique clique-agent clique-server; do
+    ln -sf "$INSTALL_DIR/.venv/bin/$cmd" "$BIN_DIR/$cmd"
+done
+export CLIQUE_SERVER
+echo "installed: $BIN_DIR/clique (server: $CLIQUE_SERVER)"
+echo "join now:  clique join --server $CLIQUE_SERVER --runtime echo --param-b 7"
+"""
+
+
 class AgentConnections:
     """Live WS connections keyed by node_id."""
 
@@ -143,10 +192,26 @@ class SchedulerServer:
         """Submit + immediate scheduling; shared by REST routes."""
         from common.types import TaskType as _TaskType
         raw_code_prompt = request.prompt  # pre-prompt-build, for session log
+        live_snap: dict | None = None
+        if request.workspace_id:
+            # validate workspace exists; stamp head seq so the agent can
+            # detect drift (invalidate msgs carry newer seqs)
+            try:
+                live_snap = self.live_workspaces.snapshot(request.workspace_id)
+            except KeyError:
+                raise HTTPException(404, "no such workspace")
+            request.workspace_seq = live_snap["seq"]
         if request.task_type == _TaskType.CODE_EDIT and request.code is not None:
             from scheduler.harness import build_code_prompt
             if not request.prompt:
                 raise HTTPException(422, "prompt required for code tasks")
+            if live_snap is not None:
+                # live files win over the client-supplied snapshot: the
+                # agent reasons on what collaborators see right now
+                merged = dict(request.code.files)
+                for path, f in live_snap["files"].items():
+                    merged[path] = f["text"]
+                request.code.files = merged
             request.prompt = build_code_prompt(request.prompt, request.code)
             request.max_output_tokens = max(request.max_output_tokens, 2048)
         if request.session_id:
@@ -159,14 +224,6 @@ class SchedulerServer:
                 request.session_id, version, "user", raw_code_prompt)
             if not request.model_hint and session.cluster_key:
                 request.model_hint = session.cluster_key
-        if request.workspace_id:
-            # validate workspace exists; stamp head seq so the agent can
-            # detect drift (invalidate msgs carry newer seqs)
-            try:
-                snap = self.live_workspaces.snapshot(request.workspace_id)
-            except KeyError:
-                raise HTTPException(404, "no such workspace")
-            request.workspace_seq = snap["seq"]
         try:
             task_id = self.router.submit(request)
         except OverflowError as e:
@@ -211,6 +268,10 @@ class SchedulerServer:
                 role=NodeRole(body.get("role", "client")),
             )
             token = secrets.token_urlsafe(24)
+            # one live token per node: prune stale tokens from prior
+            # authenticate() calls so the in-memory map does not leak.
+            self.tokens = {t: n for t, n in self.tokens.items()
+                           if n != node_id}
             self.tokens[token] = node_id
             await self.events.publish("node.joined", {
                 "node_id": node_id, "display_name": body["display_name"],
@@ -302,19 +363,12 @@ class SchedulerServer:
         async def index_txt(request: Request) -> str:
             base = str(request.base_url).rstrip("/")
             return (
-                "clique headless access (pick one):\n"
-                f"  snapshot:  curl -s {base}/dash.txt\n"
-                f"  live loop: watch -n 2 curl -s {base}/dash.txt\n"
-                f"  live TUI:  curl -fsSL {base}/tui.py -o /tmp/clique-tui.py"
-                " && python3 /tmp/clique-tui.py --server "
+                f"join this clique (one line, no token needed):\n"
+                f"  curl -fsSL {base}/join.sh | sh\n"
+                f"or without installing anything:\n"
+                f"  curl -fsSL {base}/tui.py | python3 - --server "
                 f"{base}\n"
-                f"  one-liner: curl -fsSL {base}/tui.py | python3 - --server "
-                f"{base}\n"
-                f"  snapshot once via python: curl -fsSL {base}/tui.py | python3 -"
-                f" --server {base} --once\n"
-                f"  full CLI install: curl -fsSL {base}/join.sh | sh\n"
-                "  (repo is private: export CLIQUE_GITHUB_TOKEN=github_pat_...\n"
-                "   with contents:read first, or the clone step aborts)\n"
+                f"snapshot:  curl -s {base}/dash.txt\n"
             )
 
         @app.get("/dash.txt", response_class=PlainTextResponse)
@@ -342,6 +396,44 @@ class SchedulerServer:
             buf.write("\n")
             return buf.getvalue()
 
+        @app.get("/app.tgz")
+        async def app_tgz():
+            """Source bundle of the running server tree (no GitHub needed).
+
+            Served from git-archive of HEAD; falls back to a tar of the
+            server checkout when git is unavailable. The joiner unpacks
+            this instead of cloning a repo, so there is no PAT, no ssh
+            key, and no GitHub round-trip in the join path."""
+            import io as _io
+            import subprocess as _sp
+            from fastapi.responses import Response as _Response
+            from pathlib import Path as _Path
+
+            root = _Path(__file__).resolve().parents[1]
+            blob: bytes | None = None
+            with contextlib.suppress(Exception):
+                blob = _sp.check_output(
+                    ["git", "-C", str(root), "archive", "HEAD",
+                     "--format=tar"], timeout=30)
+                import gzip as _gzip
+                blob = _gzip.compress(blob)
+            if blob is None:
+                import tarfile as _tar
+                buf = _io.BytesIO()
+                with _tar.open(fileobj=buf, mode="w:gz") as t:
+                    for p in sorted(root.rglob("*")):
+                        rel = p.relative_to(root)
+                        if rel.parts and rel.parts[0] in (
+                                ".venv", ".git", "__pycache__",
+                                "state-repo", "code-repo", "workspaces",
+                                "models"):
+                            continue
+                        t.add(p, arcname=str(rel))
+                blob = buf.getvalue()
+            return _Response(content=blob, media_type="application/gzip",
+                             headers={"Content-Disposition":
+                                      'attachment; filename="clique-app.tgz"'})
+
         @app.get("/tui.py", response_class=PlainTextResponse)
         async def tui_py() -> str:
             """Stdlib-only live TUI source: curl | python3, no install."""
@@ -357,43 +449,17 @@ class SchedulerServer:
 
         @app.get("/join.sh", response_class=PlainTextResponse)
         async def join_sh(request: Request) -> str:
-            """One-line full CLI installer pinned to this server.
+            """Self-contained installer: server URL + app bundle baked in.
 
-            Serves scripts/bootstrap.sh verbatim with CLIQUE_SERVER pre-set,
-            so the installer logic lives in exactly one place. Private-repo
-            token support (CLIQUE_GITHUB_TOKEN) comes along automatically.
-            """
+            No GitHub, no PAT, no ssh key. The joiner only runs:
+              curl -fsSL {base}/join.sh | sh
+            Source comes from {base}/app.tgz (the running server tree).
+            Auth to the clique happens after install via signed
+            registration (node keypair -> bearer token), never in shell."""
             from pathlib import Path
 
             base = str(request.base_url).rstrip("/")
-            script = (Path(__file__).resolve().parents[1] / "scripts"
-                      / "bootstrap.sh").read_text()
-            header = (
-                "#!/bin/sh\n"
-                "# full clique CLI install, server preconfigured to this node.\n"
-                f"#   curl -fsSL {base}/join.sh | sh\n"
-                "# private repo: export CLIQUE_GITHUB_TOKEN=github_pat_... first.\n"
-                "# lightweight alternative (no install, live TUI only):\n"
-                f"#   curl -fsSL {base}/tui.py | python3 - --server {base}\n"
-                f"export CLIQUE_SERVER=\"{base}\"\n"
-            )
-            # Strip the bootstrap shebang (already emitted above) and its
-            # trailing generic join hints; ours are server-pinned instead.
-            lines = script.splitlines(keepends=True)
-            if lines and lines[0].startswith("#!"):
-                lines = lines[1:]
-            cut = len(lines)
-            for i, ln in enumerate(lines):
-                if ln.startswith('echo "installed: $BIN_DIR/clique"'):
-                    cut = i
-                    break
-            body = "".join(lines[:cut])
-            footer = (
-                "echo \"installed: $BIN_DIR/clique (server: $CLIQUE_SERVER)\"\n"
-                "echo \"live TUI now:  clique dash --server $CLIQUE_SERVER\"\n"
-                "echo \"join now:      clique join --server $CLIQUE_SERVER --runtime echo --param-b 7\"\n"
-            )
-            return header + body + footer
+            return _JOIN_SH_TEMPLATE.replace("__CLIQUE_SERVER__", base)
 
         register_extended_routes(app, self)
         register_ws_routes(app, self)
