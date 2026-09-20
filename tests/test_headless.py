@@ -554,3 +554,22 @@ async def test_home_spawn_error_shows_tail_not_busy():
             await app2._run_join()
             msg = str(app2.query_one("#msg", Static).content)
             assert "join failed" in msg and "port in use" in msg, msg
+
+
+async def test_home_chat_failure_clears_thinking():
+    """Failed chat must not leave a stuck 'thinking...' indicator."""
+    from unittest.mock import patch
+
+    from textual.widgets import Input, Static
+
+    import client.home as H
+
+    app = H.HomeApp.build()("http://127.0.0.1:1")
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        app.query_one("#prompt", Input).value = "hi"
+        with patch("client.home.do_chat", side_effect=RuntimeError("boom")):
+            await app._run_chat()
+            ans = str(app.query_one("#answer", Static).content)
+            assert "thinking" not in ans, ans
+            assert "boom" in str(app.query_one("#msg", Static).content)

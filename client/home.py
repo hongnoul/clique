@@ -401,21 +401,35 @@ class HomeApp:
                 self._next = "dash"
                 self.exit()
 
+            async def _run_stop(self) -> None:
+                try:
+                    msg = await asyncio.to_thread(
+                        _helpers["do_stop_server_local"])
+                except Exception as e:
+                    self.say(f"stop failed: {e}")
+                    return
+                self.say(msg)
+                await self.refresh_all()
+
+            async def _run_leave(self) -> None:
+                try:
+                    msg = await asyncio.to_thread(_helpers["do_leave"])
+                except Exception as e:
+                    self.say(f"leave failed: {e}")
+                    return
+                self.say(msg)
+                await self.refresh_all()
+
             async def on_button_pressed(self, event) -> None:
                 bid = event.button.id
                 if bid == "host":
                     await self._run_host()
                 elif bid == "stop":
-                    msg = await asyncio.to_thread(
-                        _helpers["do_stop_server_local"])
-                    self.say(msg)
-                    await self.refresh_all()
+                    await self._run_stop()
                 elif bid == "join":
                     await self._run_join()
                 elif bid == "leave":
-                    msg = await asyncio.to_thread(_helpers["do_leave"])
-                    self.say(msg)
-                    await self.refresh_all()
+                    await self._run_leave()
                 elif bid == "refresh":
                     await self.action_refresh()
                 elif bid == "dash":
@@ -442,6 +456,8 @@ class HomeApp:
                 try:
                     out = await do_chat(self.server_url, prompt)
                 except Exception as e:
+                    if ans is not None:
+                        ans.update("")
                     self.say(f"chat failed: {e}")
                     return
                 if ans is not None:
