@@ -48,3 +48,8 @@ Notes:
 ## End-to-end clique verification
 - clique-server on gx10 :7777, node `gx10-vllm` joined with openai-compat -> vLLM :8000.
 - `clique submit "Write a haiku about fast GPUs"` routed, streamed, and committed in 8.3s.
+
+## Boot durability (2026-09-19)
+- `vllm` docker container: `--restart unless-stopped`.
+- `clique-server.service` and `clique-node.service` installed and enabled on gx10 (systemd). Node unit waits for vLLM readiness before joining, so the full stack self-assembles after reboot.
+- Verified: systemd-managed stack served a clique submit end-to-end (0.6s).
