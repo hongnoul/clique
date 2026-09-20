@@ -2,9 +2,25 @@
 
 Server: `http://100.83.233.124:7777` over Tailscale.
 GPU engine: vLLM FP8 `nemotron-3-nano-fp8` on :8000, 340+ TPS aggregate at 32-way batching,
-16 `parallel_slots` on the clique node. Status 2026-09-20: gx10 was unreachable
-over Tailscale from this Mac (ping/SSH/HTTP all timed out) — verify the box is up
-before inviting teammates. The onboarding below assumes the server is reachable.
+16 `parallel_slots` on the clique node.
+
+## Live status (2026-09-20, verified end-to-end from this Mac)
+
+- Server tree deployed to gx10 `~/tcj` from this branch (tarball, backup kept
+  as `~/tcj.bak-*`). Live at `http://100.83.233.124:7777` with the new routes:
+  `/` menu, `/join.sh`, `/app.tgz`, `/repo.bundle`, `/v1/clique` now reports
+  `protocol_version` + `server_sha` (`unknown` on gx10: tarball install, no git).
+- Supervision: the system units need sudo. User-level units installed at
+  `~/.config/systemd/user/clique-server.service` + `clique-node.service`
+  (`Restart=always`, enabled). Server is `active` under the user manager.
+- Verified: `clique onboard --dry` prints `server ok (protocol=1)`;
+  echo-node join + submit + ledger increment (succeeded 47 -> 48).
+- **Blocked money loop:** vLLM is down. `asus` is not in the `docker` group
+  (`docker.sock` is `root:docker`), so the node unit waits in `start-pre` on
+  `:8000/v1/models` forever. Fix on gx10 (needs one sudo):
+  `sudo usermod -aG docker asus` then re-login, or `sudo systemctl start vllm`
+  if a system unit exists. Until then gx10 serves onboarding + echo tasks only,
+  no GPU throughput.
 
 ## Graceful principles
 

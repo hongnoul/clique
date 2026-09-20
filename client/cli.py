@@ -352,26 +352,21 @@ def submit(prompt: str,
             raise typer.Exit(1) from e
         extra = f" session {sid}" if sid else ""
         console.print(f"[dim]task {task_id}{extra} submitted[/]")
-        shown = 0
-        while True:
-            data = await client.task(task_id)
-            partial = data.get("partial_output", "")
-            if len(partial) > shown:
-                console.print(partial[shown:], end="")
-                shown = len(partial)
-            if data["state"] in ("succeeded", "failed", "cancelled", "expired"):
-                break
-            await asyncio.sleep(0.25)
-        if data["state"] == "succeeded":
-            out = data["result"]["output"] or ""
-            if len(out) > shown:
-                console.print(out[shown:], end="")
-            node = data.get("assigned_node") or "?"
+        view = None
+        async for delta, done in client.stream(task_id):
+            if delta:
+                console.print(delta, end="")
+            if done is not None:
+                view = done
+        assert view is not None
+        if view.state.value == "succeeded":
+            node = view.assigned_node or "?"
+            wall = view.result.wall_time_s or 0 if view.result else 0
             console.print(f"\n[green]done[/] on node {node[:8]} "
-                          f"({data['result']['wall_time_s']:.1f}s)")
+                          f"({wall:.1f}s)")
         else:
-            console.print(f"\n[red]{data['state']}[/]: "
-                          f"{(data.get('result') or {}).get('error')}")
+            err = view.result.error if view.result and view.result.error else "?"
+            console.print(f"\n[red]{view.state.value}[/]: {err}")
 
     asyncio.run(run())
 
@@ -413,7 +408,20 @@ def code_submit(prompt: str = typer.Option(..., "--prompt", "-p"),
         raise typer.BadParameter("give at least one --file or --inline")
 
     async def show_result(task_id: str) -> None:
-        view = await client.wait(task_id)
+        # Stream live progress while the node generates (code tasks can
+        # run for minutes: harness build + inference + test verify), then
+        # show the verified diff on accept.
+        view = None
+        saw_delta = False
+        async for delta, done in client.stream(task_id):
+            if delta:
+                saw_delta = True
+                console.print(delta, end="")
+            if done is not None:
+                view = done
+        assert view is not None
+        if saw_delta:
+            console.print()  # newline after streamed progress
         if view.state.value == "succeeded":
             diff = await client.code_diff(task_id)
             console.print("[green]accepted[/]",

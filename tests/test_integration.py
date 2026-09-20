@@ -137,6 +137,35 @@ async def test_task_lifecycle_success(clique):
 
 
 @pytest.mark.asyncio
+async def test_partial_output_streams_before_completion(clique):
+    """partial_output is visible while the task runs, not just at done.
+
+    Guards the live-streaming contract end to end: the agent flushes
+    inference tokens as progress, the server accumulates them, and
+    GET /v1/tasks/{id} exposes them before the terminal result lands.
+    """
+    base, _, _ = clique
+    # long echo prompt: many words x 5ms each keeps the task alive long
+    # enough to observe mid-flight progress deterministically.
+    task_id = await submit(base, "word " * 200, max_output_tokens=200)
+    seen_partial = ""
+    async with httpx.AsyncClient() as c:
+        for _ in range(100):
+            data = (await c.get(f"{base}/v1/tasks/{task_id}")).json()
+            if data.get("partial_output"):
+                seen_partial = data["partial_output"]
+                break
+            if data["state"] in ("succeeded", "failed", "cancelled",
+                                 "expired"):
+                break
+            await asyncio.sleep(0.05)
+    data = await wait_done(base, task_id)
+    assert data["state"] == "succeeded"
+    assert seen_partial, "no partial_output observed before completion"
+    assert data["result"]["output"].startswith(seen_partial)
+
+
+@pytest.mark.asyncio
 async def test_long_prompt_routes_to_bigger_model(clique):
     base, server, _ = clique
     long_prompt = "word " * 3000  # ~3750 est tokens
@@ -247,3 +276,25 @@ async def test_clusters_view(clique):
     keys = {c["cluster_key"] for c in clusters}
     assert "echo-7b-none" in keys and "echo-70b-none" in keys
     assert {c["cluster_key"] for c in info["clusters"]} == keys
+
+
+@pytest.mark.asyncio
+async def test_sdk_stream_yields_deltas_then_done(clique):
+    """CliqueClient.stream() reassembles partial_output incrementally."""
+    from client.sdk import CliqueClient
+    from common.types import TaskState as _TS
+
+    base, _, _ = clique
+    client = CliqueClient(base)
+    task_id = await client.submit("word " * 200, max_output_tokens=200)
+    deltas: list[str] = []
+    done = None
+    async for delta, view in client.stream(task_id, poll_s=0.05,
+                                           timeout_s=15.0):
+        if delta:
+            deltas.append(delta)
+        if view is not None:
+            done = view
+    assert done is not None and done.state == _TS.SUCCEEDED
+    assert deltas, "stream() yielded no progress deltas"
+    assert "".join(deltas) == (done.result.output or "")

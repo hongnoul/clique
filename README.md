@@ -73,6 +73,9 @@ tcj/
 
 ## Getting started
 
+Dogfooding the live server? Start with [docs/dogfood.md](docs/dogfood.md):
+`clique onboard --dry` first, echo before GPU, one wave at a time.
+
 ```bash
 git clone https://github.com/hongnoul/tcj
 cd tcj

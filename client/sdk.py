@@ -140,8 +140,9 @@ class CliqueClient:
     async def task(self, task_id: str) -> dict:
         return await self._get(f"/v1/tasks/{task_id}")  # includes partial_output
 
-    async def wait(self, task_id: str, poll_s: float = 0.3,
+    async def wait(self, task_id: str, poll_s: float = 0.15,
                    timeout_s: float = 600.0) -> TaskView:
+        """Block until terminal. For live tokens use stream() instead."""
         deadline = asyncio.get_event_loop().time() + timeout_s
         while True:
             data = await self.task(task_id)
@@ -149,6 +150,40 @@ class CliqueClient:
             if view.state in (TaskState.SUCCEEDED, TaskState.FAILED,
                               TaskState.CANCELLED, TaskState.EXPIRED):
                 return view
+            if asyncio.get_event_loop().time() > deadline:
+                raise TimeoutError(f"task {task_id} still {view.state.value}")
+            await asyncio.sleep(poll_s)
+
+    async def stream(self, task_id: str, poll_s: float = 0.1,
+                     timeout_s: float = 600.0):
+        """Yield (partial_output_delta, done_view) as tokens arrive.
+
+        Polls GET /v1/tasks/{id} (server accumulates agent WS progress
+        into partial_output) and yields each new slice the moment it
+        appears. The final yield carries the terminal TaskView; earlier
+        yields carry None as the view. Usage:
+            async for delta, done in client.stream(tid):
+                if delta: print(delta, end="", flush=True)
+                if done is not None: view = done
+        """
+        deadline = asyncio.get_event_loop().time() + timeout_s
+        shown = 0
+        while True:
+            data = await self.task(task_id)
+            partial = data.get("partial_output", "") or ""
+            if len(partial) > shown:
+                yield partial[shown:], None
+                shown = len(partial)
+            view = TaskView.model_validate(data)
+            if view.state in (TaskState.SUCCEEDED, TaskState.FAILED,
+                              TaskState.CANCELLED, TaskState.EXPIRED):
+                # terminal output may exceed streamed partial (buffered
+                # tail or code-task result): emit the remainder once.
+                out = (view.result.output or "") if view.result else ""
+                if len(out) > shown:
+                    yield out[shown:], None
+                yield "", view
+                return
             if asyncio.get_event_loop().time() > deadline:
                 raise TimeoutError(f"task {task_id} still {view.state.value}")
             await asyncio.sleep(poll_s)
