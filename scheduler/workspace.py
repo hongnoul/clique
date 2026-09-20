@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import shutil
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -149,6 +150,20 @@ class WorkspaceService:
 
     def list_ids(self) -> list[str]:
         return list(self._workspaces)
+
+    def clear(self) -> int:
+        """Drop every live workspace from memory and disk. Returns count."""
+        n = len(self._workspaces)
+        for ws in list(self._workspaces.values()):
+            if ws._flush_task and not ws._flush_task.done():
+                ws._flush_task.cancel()
+        self._workspaces.clear()
+        self._ops_since_flush.clear()
+        self._actors_since_flush.clear()
+        for child in list(self.base_dir.iterdir()):
+            if child.is_dir():
+                shutil.rmtree(child, ignore_errors=True)
+        return n
 
     def _init_git(self, ws: Workspace) -> None:
         try:

@@ -172,6 +172,22 @@ class SessionManager:
         session = self.get(session_id)
         self._save(session, active=False)
 
+    def delete(self, session_id: str) -> None:
+        """Remove a session row and its stored turns."""
+        self.get(session_id)  # existence check
+        self._db.execute("DELETE FROM sessions WHERE session_id=?", (session_id,))
+        self._db.commit()
+        self._migrating.discard(session_id)
+        self.contexts.delete(session_id)
+
+    def clear(self) -> int:
+        """Delete every session row. Returns how many were removed."""
+        n = self._db.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
+        self._db.execute("DELETE FROM sessions")
+        self._db.commit()
+        self._migrating.clear()
+        return n
+
     def export_state(self) -> str:
         """Canonical JSON for vcs snapshots."""
         return json.dumps(

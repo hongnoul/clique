@@ -220,3 +220,155 @@ def test_maybe_compact_uses_window_output_cap(tmp_path):
     assert req.max_output_tokens == summary_max_output_tokens(
         8192, req.est_prompt_tokens())
     assert req.record_turns is False
+
+
+def test_clear_wipes_sessions_queue_and_data(tmp_path):
+    from common.types import CodeTaskSpec, TaskResult, TaskView
+    from scheduler.server import SchedulerServer
+
+    cfg = Config()
+    cfg.node.data_dir = tmp_path / "n"
+    cfg.server.db_path = tmp_path / "s.db"
+    server = SchedulerServer(cfg)
+
+    sess = server.sessions.create("owner", "echo-7b-none")
+    sid = sess.session_id
+    server.sessions.append_turn_latest(sid, "user", "hello")
+    server.sessions.append_turn_latest(sid, "assistant", "ack")
+    tid = server.router.submit(TaskRequest(
+        prompt="queued", idempotency_key="k-clear"))
+    server.progress[tid] = "partial"
+    server.race_groups["r1"] = [tid]
+    server._compacting.add(sid)
+    server.live_workspaces.create("w-clear", {"a.py": "print(1)\n"})
+    server.workspaces.create("t-ws", CodeTaskSpec(files={"b.py": "x = 1\n"}))
+    view = server.router.get_task(tid)
+    assert view is not None
+    server.ledger.record(TaskView(
+        request=view.request, state=TaskState.SUCCEEDED,
+        assigned_node="owner",
+        result=TaskResult(task_id=tid, attempt_id="",
+                          state=TaskState.SUCCEEDED, output="ok")))
+
+    counts = asyncio.run(server.clear_data())
+    assert counts["sessions"] == 1
+    assert counts["context_turns"] == 2
+    assert counts["tasks"] == 1
+    assert counts["ledger"] == 1
+    assert counts["live_workspaces"] == 1
+    assert counts["workspaces"] == 1
+    assert counts["revoked"] == 0
+
+    assert server.sessions.list_active() == []
+    with pytest.raises(KeyError):
+        server.sessions.get(sid)
+    assert server.contexts.latest_version(sid) == 0
+    assert server.router.get_task(tid) is None
+    assert server.router.list_tasks() == []
+    assert server.ledger.summary()["total_terminal"] == 0
+    assert server.progress == {}
+    assert server.race_groups == {}
+    assert server._compacting == set()
+    assert server.live_workspaces.list_ids() == []
+    assert list(server.workspaces.base_dir.iterdir()) == []
+
+    # wipe is not a one-shot: new work can be submitted afterwards
+    again = server.sessions.create("owner", "echo-7b-none")
+    server.router.submit(TaskRequest(
+        prompt="after clear", idempotency_key="k-after"))
+    assert len(server.sessions.list_active()) == 1
+    assert again.session_id != sid
+    assert server.router.queue_stats()["by_state"]["queued"] == 1
+
+
+def test_delete_session_and_clear_queue_are_independent(tmp_path):
+    from scheduler.server import SchedulerServer
+
+    cfg = Config()
+    cfg.node.data_dir = tmp_path / "n"
+    cfg.server.db_path = tmp_path / "s.db"
+    server = SchedulerServer(cfg)
+    sid_a = server.sessions.create("owner", "echo-7b-none").session_id
+    sid_b = server.sessions.create("owner", "echo-7b-none").session_id
+    server.sessions.append_turn_latest(sid_a, "user", "gone")
+    tid = server.router.submit(TaskRequest(prompt="keep me", idempotency_key="k-keep"))
+
+    assert asyncio.run(server.delete_session(sid_a))
+    with pytest.raises(KeyError):
+        server.sessions.get(sid_a)
+    assert server.contexts.latest_version(sid_a) == 0
+    assert server.sessions.get(sid_b).session_id == sid_b
+    assert server.router.get_task(tid) is not None
+
+    assert asyncio.run(server.delete_task(tid))
+    assert server.router.get_task(tid) is None
+    assert len(server.sessions.list_active()) == 1
+
+    tid2 = server.router.submit(TaskRequest(prompt="q", idempotency_key="k-q"))
+    counts = asyncio.run(server.clear_queue())
+    assert counts["tasks"] == 1
+    assert server.router.get_task(tid2) is None
+    assert len(server.sessions.list_active()) == 1
+
+    counts = asyncio.run(server.clear_sessions())
+    assert counts["sessions"] == 1
+    assert server.sessions.list_active() == []
+
+
+def test_http_dashboard_deletes(tmp_path):
+    import httpx
+    from scheduler.server import SchedulerServer
+
+    cfg = Config()
+    cfg.node.data_dir = tmp_path / "n"
+    cfg.server.db_path = tmp_path / "s.db"
+    server = SchedulerServer(cfg)
+    sid = server.sessions.create("owner", "echo").session_id
+    tid = server.router.submit(TaskRequest(prompt="x", idempotency_key="k-http"))
+
+    async def run() -> None:
+        transport = httpx.ASGITransport(app=server.app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
+            r = await c.post(f"/v1/sessions/{sid}/delete")
+            assert r.status_code == 200
+            assert r.json()["deleted"] is True
+            assert (await c.get(f"/v1/sessions/{sid}")).status_code == 404
+            r = await c.post(f"/v1/tasks/{tid}/delete")
+            assert r.status_code == 200
+            sid2 = server.sessions.create("owner", "echo").session_id
+            server.router.submit(TaskRequest(prompt="y", idempotency_key="k-http-2"))
+            assert (await c.post("/v1/sessions/clear")).json()["sessions"] >= 1
+            assert (await c.post("/v1/tasks/clear")).json()["tasks"] >= 1
+            assert (await c.get("/v1/sessions")).json() == []
+            assert (await c.get("/v1/tasks")).json() == []
+            assert (await c.get(f"/v1/sessions/{sid2}")).status_code == 404
+
+    asyncio.run(run())
+
+
+def test_http_shutdown_does_not_500(tmp_path):
+    """POST /v1/server/shutdown must resolve the actor (NameError was a 500)."""
+    import httpx
+    from scheduler.server import SchedulerServer
+
+    cfg = Config()
+    cfg.node.data_dir = tmp_path / "n"
+    cfg.server.db_path = tmp_path / "s.db"
+    server = SchedulerServer(cfg)
+    server.tokens["tok"] = "n-owner"
+    stopped: list[str] = []
+
+    async def fake_now(reason: str = "server shutdown") -> None:
+        stopped.append(reason)
+
+    server.shutdown_now = fake_now  # type: ignore[method-assign]
+
+    async def run() -> None:
+        transport = httpx.ASGITransport(app=server.app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://t") as c:
+            r = await c.post("/v1/server/shutdown", json={"confirm": True},
+                             headers={"Authorization": "Bearer tok"})
+            assert r.status_code == 200, r.text
+            assert r.json()["shutting_down"] is True
+
+    asyncio.run(run())

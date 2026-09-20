@@ -93,3 +93,15 @@ def test_summary_max_output_independent_of_chat_cap():
     tight = summary_max_output_tokens(8192, prompt_tokens=7800)
     assert tight == 8192 - 256 - 7800
     assert tight < cap
+
+
+def test_clear_deletes_all_turns(tmp_path):
+    store, sid = _store(tmp_path)
+    store.append_turn(sid, 0, _blob("user", "keep me"))
+    store.append_turn("s-other", 0, _blob("user", "other session"))
+    assert store.clear() == 2
+    assert store.latest_version(sid) == 0
+    assert store.iter_turns(sid) == []
+    assert store.iter_turns("s-other") == []
+    store.append_turn(sid, 0, _blob("user", "fresh"))
+    assert store.latest_version(sid) == 1

@@ -317,6 +317,13 @@ class ContextStore:
             "DELETE FROM context_turns WHERE session_id=?", (session_id,))
         self._db.commit()
 
+    def clear(self) -> int:
+        """Delete every stored turn. Returns how many rows were removed."""
+        n = self._db.execute("SELECT COUNT(*) FROM context_turns").fetchone()[0]
+        self._db.execute("DELETE FROM context_turns")
+        self._db.commit()
+        return n
+
     def gc(self, retain_days: int) -> int:
         """Delete turns older than retain_days. Returns bytes freed."""
         from datetime import timedelta

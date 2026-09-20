@@ -138,6 +138,14 @@ class SuggestionEngine:
         """Currently valid suggestions for the dashboard."""
         return list(self._active.values())
 
+    def clear(self) -> int:
+        """Drop active suggestions and hysteresis state. Returns how many."""
+        n = len(self._active)
+        self._active.clear()
+        self._cooldowns.clear()
+        self._overloaded_since.clear()
+        return n
+
     def dismiss(self, suggestion_id: str, actor: str) -> None:
         """Owner/op dismisses; suppress identical suggestions for a
         cooldown period."""

@@ -8,6 +8,44 @@
 <style>
   .op { color: #8250df; } .owner { color: #bc4c00; }
 
+  /* card headers that carry an action (clear all) sit on their own row */
+  .card-head { display: flex; align-items: flex-start; justify-content: space-between;
+               gap: .75rem; margin-bottom: .5rem; flex: none; }
+  .card-head h2 { margin: 0; }
+  h2 .sidetitle { color: var(--muted); font-weight: 400; font-size: .7rem; }
+  .empty { color: var(--muted); font-size: .8rem; font-weight: 400; }
+  .clear-btn { background: transparent; border: 1px solid var(--border); color: var(--muted);
+               font: inherit; font-size: .72rem; letter-spacing: .02em; cursor: pointer;
+               padding: .2rem .5rem; white-space: nowrap; flex-shrink: 0; }
+  .clear-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+  .clear-btn:disabled { opacity: .4; cursor: default; }
+
+  /* per-row delete: revealed on hover, always there for touch */
+  th.row-del-col, td.row-del-col { width: 2rem; min-width: 2rem; text-align: center;
+                                   padding-left: .15rem; padding-right: .25rem; }
+  .row-del { opacity: 0; pointer-events: none; background: none; border: 0; color: var(--muted);
+             cursor: pointer; padding: .1rem; line-height: 0; vertical-align: middle; }
+  tr:hover .row-del { opacity: 1; pointer-events: auto; }
+  @media (hover: none) { .row-del { opacity: 1; pointer-events: auto; } }
+  .row-del:hover { color: #f85149; }
+
+  /* confirm dialog: deletes are irreversible, so never a bare confirm() */
+  #confirmDlg { position: fixed; inset: 0; z-index: 40; display: flex;
+                align-items: center; justify-content: center; }
+  #confirmDlg[hidden] { display: none; }
+  .dlg-backdrop { position: absolute; inset: 0; background: rgba(0,0,0,.45); }
+  .dlg-card { position: relative; background: var(--card-bg); border: 1px solid var(--border);
+              color: var(--fg); min-width: 280px; max-width: 420px; padding: 1rem 1.1rem;
+              box-shadow: 0 12px 40px rgba(0,0,0,.45); }
+  .dlg-card p { margin: 0 0 1rem; font-size: .85rem; line-height: 1.4; }
+  .dlg-actions { display: flex; justify-content: flex-end; gap: .5rem; }
+  .dlg-actions button { font: inherit; font-size: .78rem; cursor: pointer;
+                        padding: .3rem .7rem; border: 1px solid var(--border);
+                        background: var(--card-bg); color: var(--fg); }
+  .dlg-actions button:hover { border-color: var(--accent); color: var(--accent); }
+  #confirmYes { border-color: #f85149; color: #f85149; }
+  #confirmYes:hover { background: rgba(248,81,73,.12); }
+
   /* mascot: a small live companion parked in the corner, not squeezed
      into the header next to the (already eye-shaped) static logo */
   #mascot { position: fixed; right: 2rem; bottom: 2rem; width: 84px; height: 72px;
@@ -23,7 +61,7 @@
   .col-left, .col-right { display: flex; flex-direction: column; gap: 1rem; min-height: 0; }
   .col-left .card, .col-right, .col-right .card {
     display: flex; flex-direction: column; min-height: 0; flex: 1; }
-  .card > div:last-child { flex: 1; overflow: auto; min-height: 0; }
+  .card-scroll { flex: 1; overflow: auto; min-height: 0; }
 
   /* narrow: one column of cards, each capped so several stay reachable
      by scrolling the page rather than one card owning the screen. */
@@ -31,11 +69,11 @@
     body { height: auto; min-height: 100%; }
     .layout { display: flex; flex-direction: column; height: auto; }
     .col-left, .col-right { flex: none; }
-    .card > div:last-child { max-height: 320px; }
+    .card-scroll { max-height: 320px; }
   }
   @media (max-width: 700px) {
     .layout, .col-left, .col-right { gap: .6rem; }
-    .card > div:last-child { max-height: 15rem; }
+    .card-scroll { max-height: 15rem; }
     /* long node names would otherwise force a sideways scroll on their own */
     #nodes td:first-child, #leaderboard td:nth-child(2) { word-break: break-all; }
     #mascot { right: .7rem; bottom: .7rem; width: 58px; height: 50px; }
@@ -71,17 +109,39 @@
 
 <div class="layout">
   <div class="col-left">
-    <div class="card"><h2>NODES</h2><div id="nodes"></div></div>
-    <div class="card"><h2>SESSIONS</h2><div id="sessions"></div></div>
-    <div class="card"><h2>LEADERBOARD <span class="muted" style="font-size:.7rem">
-      tasks completed, last 100</span></h2><div id="leaderboard"></div></div>
+    <div class="card"><h2>NODES</h2><div id="nodes" class="card-scroll"></div></div>
+    <div class="card">
+      <div class="card-head">
+        <h2>SESSIONS</h2>
+        <button type="button" id="clearSessions" class="clear-btn" disabled>clear all</button>
+      </div>
+      <div id="sessions" class="card-scroll"></div>
+    </div>
+    <div class="card"><h2>LEADERBOARD <span class="sidetitle">· tasks completed,
+      last 100</span></h2><div id="leaderboard" class="card-scroll"></div></div>
   </div>
   <div class="col-right">
-    <div class="card"><h2>QUEUE <span class="muted" style="font-size:.7rem">click a
-      running task to watch it</span></h2><div id="tasks"></div></div>
-    <div class="card"><h2>LIVE OUTPUT <span id="liveTask" class="muted"
-      style="font-size:.7rem"></span></h2>
-      <div id="liveOut"><span class="muted">no task watched</span></div></div>
+    <div class="card">
+      <div class="card-head">
+        <h2>TASK QUEUE</h2>
+        <button type="button" id="clearTasks" class="clear-btn" disabled>clear all</button>
+      </div>
+      <div id="tasks" class="card-scroll"></div>
+    </div>
+    <div class="card"><h2>LIVE OUTPUT <span id="liveTask" class="sidetitle">· click a
+      running task to watch its live output</span></h2>
+      <div id="liveOut" class="card-scroll"><span class="empty">none</span></div></div>
+  </div>
+</div>
+
+<div id="confirmDlg" hidden>
+  <div class="dlg-backdrop"></div>
+  <div class="dlg-card" role="dialog" aria-modal="true" aria-labelledby="confirmMsg">
+    <p id="confirmMsg"></p>
+    <div class="dlg-actions">
+      <button type="button" id="confirmNo">cancel</button>
+      <button type="button" id="confirmYes">delete</button>
+    </div>
   </div>
 </div>
 
@@ -89,6 +149,95 @@
 <script src="/assets/mascot.js"></script>
 <script>
 function badge(s) { return `<span class="badge ${s}">${s}</span>`; }
+function empty(text) { return `<span class="empty">${text}</span>`; }
+
+const TRASH = '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">'
+  + '<path fill="currentColor" d="M6.5 1h3l.5 1H14v1H2V2h4l.5-1zM3 5h10l-.6 9.2A1.5 1.5 0 0 1'
+  + ' 10.9 15.5H5.1A1.5 1.5 0 0 1 3.6 14.2L3 5zm3 1.5v7h1v-7H6zm3 0v7h1v-7H9z"/></svg>';
+
+function clusterKey(n) {
+  const m = n.model;
+  if (!m) return '-';
+  if (m.artifact_hash) return `${m.family}:${String(m.artifact_hash).slice(0, 12)}`;
+  return `${m.family}-${m.parameter_count_b}b-${m.quantization || 'none'}`;
+}
+
+// innerHTML on a 5s poll would fight whoever is scrolling the card
+function fill(id, html) {
+  const el = $(id);
+  const top = el.scrollTop;
+  el.innerHTML = html;
+  el.scrollTop = top;
+}
+
+function delBtn(kind, id) {
+  return `<button type="button" class="row-del" data-del-${kind}="${id}"`
+    + ` aria-label="delete ${kind}">${TRASH}</button>`;
+}
+
+async function apiMutate(path) {
+  const r = await fetch(path, { method: 'POST' });
+  if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
+  return r.json();
+}
+
+// --- confirm dialog: a delete is irreversible, so it always asks ---
+let confirmResolve = null;
+function confirmDlg(message) {
+  return new Promise((resolve) => {
+    if (confirmResolve) confirmResolve(false);
+    confirmResolve = resolve;
+    $('confirmMsg').textContent = message;
+    $('confirmDlg').hidden = false;
+    $('confirmYes').focus();
+  });
+}
+function settleConfirm(ok) {
+  $('confirmDlg').hidden = true;
+  const r = confirmResolve;
+  confirmResolve = null;
+  if (r) r(ok);
+}
+$('confirmYes').onclick = () => settleConfirm(true);
+$('confirmNo').onclick = () => settleConfirm(false);
+$('confirmDlg').querySelector('.dlg-backdrop').onclick = () => settleConfirm(false);
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !$('confirmDlg').hidden) settleConfirm(false);
+});
+
+async function onDeleteClick(kind, id) {
+  const msg = kind === 'session'
+    ? `Delete session ${id} from the server? This removes its conversation too.`
+    : `Delete task ${id} from the queue?`;
+  if (!await confirmDlg(msg)) return;
+  try {
+    await apiMutate(kind === 'session'
+      ? `/v1/sessions/${id}/delete`
+      : `/v1/tasks/${id}/delete`);
+  } catch (e) { console.error(e); }
+  refresh();
+}
+
+$('clearSessions').onclick = async () => {
+  if (!await confirmDlg('Delete all sessions and their conversation history?')) return;
+  try { await apiMutate('/v1/sessions/clear'); } catch (e) { console.error(e); }
+  refresh();
+};
+$('clearTasks').onclick = async () => {
+  if (!await confirmDlg('Delete every task in the queue?')) return;
+  try { await apiMutate('/v1/tasks/clear'); } catch (e) { console.error(e); }
+  refresh();
+};
+
+// delegated so re-rendered rows keep working without rebinding
+document.addEventListener('click', (e) => {
+  const sess = e.target.closest('[data-del-session]');
+  if (sess) { e.preventDefault(); onDeleteClick('session', sess.dataset.delSession); return; }
+  const task = e.target.closest('[data-del-task]');
+  if (task) { e.preventDefault(); onDeleteClick('task', task.dataset.delTask); return; }
+  const live = e.target.closest('tr.live');
+  if (live && live.dataset.task) watchTask(live.dataset.task);
+});
 
 function renderLeaderboard(tasks, nodesById) {
   const counts = {};
@@ -97,7 +246,7 @@ function renderLeaderboard(tasks, nodesById) {
     counts[t.assigned_node] = (counts[t.assigned_node] || 0) + 1;
   }
   const ranked = Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 8);
-  if (!ranked.length) return '<span class="muted">no tasks completed yet</span>';
+  if (!ranked.length) return empty('no tasks completed yet');
   const rankClasses = ['gold', 'silver', 'bronze'];
   return '<table><tr><th></th><th>node</th><th>tasks</th></tr>' + ranked.map(([nid, count], i) => {
     const node = nodesById[nid];
@@ -110,40 +259,46 @@ function renderLeaderboard(tasks, nodesById) {
 async function refresh() {
   try {
     const [nodes, tasks, sessions] = await Promise.all([
-      j('/v1/nodes'), j('/v1/tasks'), j('/v1/sessions')]);
+      j('/v1/nodes'), j('/v1/tasks?limit=500'), j('/v1/sessions')]);
     const nodesById = {};
     for (const n of nodes) nodesById[n.node_id] = n;
-    $('nodes').innerHTML = '<table><tr><th>name</th><th>status</th>'
-      + '<th>cluster</th><th>task</th></tr>'
-      + nodes.map(n => `<tr><td>${n.display_name}</td><td>${badge(n.status)}</td>`
-        + `<td>${n.model ? n.model.family + '-' + n.model.parameter_count_b + 'b' : '-'}</td>`
-        + `<td>${n.current_task_id ? n.current_task_id.slice(0,10) : '-'}</td></tr>`)
-        .join('') + '</table>';
-    $('tasks').innerHTML = '<table><tr><th>id</th><th>state</th><th>node</th>'
-      + '<th>type</th></tr>'
-      + tasks.slice(0, 12).map((t) => {
-        const id = t.request.task_id;
-        const clickable = (t.state === 'assigned' || t.state === 'running')
-          ? ` class="live${id === watching ? ' watching' : ''}" data-task="${id}"` : '';
-        return `<tr${clickable}><td>${id.slice(0, 10)}</td>`
-          + `<td>${t.state}</td><td>${t.assigned_node ? t.assigned_node.slice(0, 8) : '-'}</td>`
-          + `<td>${t.request.task_type}</td></tr>`;
-      }).join('') + '</table>';
-    document.querySelectorAll('tr.live').forEach((tr) => {
-      tr.onclick = () => watchTask(tr.dataset.task);
-    });
+    fill('nodes', nodes.length
+      ? '<table><tr><th>name</th><th>status</th><th>cluster</th><th>task</th></tr>'
+        + nodes.map(n => `<tr><td>${n.display_name}</td><td>${badge(n.status)}</td>`
+          + `<td>${clusterKey(n)}</td>`
+          + `<td>${n.current_task_id ? n.current_task_id.slice(0,10) : '-'}</td></tr>`)
+          .join('') + '</table>'
+      : empty('none'));
+    fill('tasks', tasks.length
+      ? '<table><tr><th>id</th><th>state</th><th>node</th><th>type</th>'
+        + '<th class="row-del-col"></th></tr>'
+        + tasks.map((t) => {
+          const id = t.request.task_id;
+          const clickable = (t.state === 'assigned' || t.state === 'running')
+            ? ` class="live${id === watching ? ' watching' : ''}" data-task="${id}"` : '';
+          return `<tr${clickable}><td>${id.slice(0, 10)}</td>`
+            + `<td>${t.state}</td><td>${t.assigned_node ? t.assigned_node.slice(0, 8) : '-'}</td>`
+            + `<td>${t.request.task_type}</td>`
+            + `<td class="row-del-col">${delBtn('task', id)}</td></tr>`;
+        }).join('') + '</table>'
+      : empty('none'));
     if (watching && !tasks.some((t) => t.request.task_id === watching)) {
       stopWatch(' (done)');
     }
-    $('sessions').innerHTML = sessions.length
-      ? '<table><tr><th>id</th><th>cluster</th><th>pinned</th><th>v</th></tr>'
+    fill('sessions', sessions.length
+      ? '<table><tr><th>id</th><th>cluster</th><th>pinned</th><th>v</th>'
+        + '<th class="row-del-col"></th></tr>'
         + sessions.map(s => `<tr><td><a href="/chat#${s.session_id}"`
           + ` style="color:var(--link)">${s.session_id}</a></td>`
           + `<td>${s.cluster_key || '-'}</td>`
           + `<td>${s.pinned_node ? s.pinned_node.slice(0,8) : '-'}</td>`
-          + `<td>${s.context_version}</td></tr>`).join('') + '</table>'
-      : '<span class="muted">none active</span>';
-    $('leaderboard').innerHTML = renderLeaderboard(tasks, nodesById);
+          + `<td>${s.context_version}</td>`
+          + `<td class="row-del-col">${delBtn('session', s.session_id)}</td></tr>`)
+          .join('') + '</table>'
+      : empty('none'));
+    fill('leaderboard', renderLeaderboard(tasks, nodesById));
+    $('clearSessions').disabled = !sessions.length;
+    $('clearTasks').disabled = !tasks.length;
   } catch (e) { console.error(e); }
 }
 
@@ -155,7 +310,7 @@ function showLive(text) { $('liveOut').textContent = text; }
 async function watchTask(taskId) {
   stopWatch();
   watching = taskId;
-  $('liveTask').textContent = `watching ${taskId.slice(0, 10)}`;
+  $('liveTask').textContent = `· watching ${taskId.slice(0, 10)}`;
   showLive('connecting...');
   try {
     const cur = await j(`/v1/tasks/${taskId}`);
