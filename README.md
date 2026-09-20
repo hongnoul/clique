@@ -74,12 +74,13 @@ tcj/
 ## Getting started
 
 Dogfooding the live server? Start with [docs/dogfood.md](docs/dogfood.md):
-`clique onboard --dry` first, echo before GPU, one wave at a time.
+run `clique`, press Join, echo before GPU, one wave at a time.
 
 ```bash
 git clone https://github.com/hongnoul/tcj
 cd tcj
-# TODO: add setup, run coordinator, join worker
+uv venv && uv pip install -e .          # or: pip install -e .
+clique                                  # button home: Host Join Chat Dashboard
 ```
 
 ## MVP quickstart
@@ -87,8 +88,13 @@ cd tcj
 ```bash
 uv venv && uv pip install -e .          # or: pip install -e .
 
+# one screen, buttons call the CLI under the hood:
+clique                                  # Host Join Chat Dashboard
+# Host = start a server here, Join = join one (probes + detects runtime)
+
+# headless / explicit (same paths the buttons call):
 # terminal 1: server node (announces over mDNS)
-clique-server
+clique serve --foreground
 
 # terminal 2+: join devices. Echo runtime needs no model;
 # point --runtime openai-compat at ollama/llama-server for real inference.
@@ -121,16 +127,20 @@ curl -s $CLIQUE/dash.txt       # snapshot, curl only
 
 # every CLI command reads $CLIQUE_SERVER, so set once and forget flags:
 export CLIQUE_SERVER=$CLIQUE
-clique dash                    # live terminal dashboard
+clique                       # button home: Host Join Chat Dashboard
+
+# headless (same paths the buttons call):
 clique join --runtime echo --param-b 7
 
 # headless box over ssh (transport hidden, same join bundle):
 clique join-remote gx10
 ```
 
-After install, `clique dash --server $CLIQUE` polls the same snapshot
-in a loop; `clique dash --full` opens the fullscreen textual TUI
-(Devices, Queue, Sessions, Governance tabs) when you have a tty.
+`clique` opens the button home (Host, Join, Chat, Dashboard, Stop,
+Leave) when you have a tty; piped runs print `clique status` instead.
+`clique dash` polls the snapshot in a loop; `clique dash --full` opens
+the fullscreen textual dashboard (Devices, Queue, Sessions,
+Governance tabs).
 
 Implemented: mDNS discovery, signed registration (first client node is op),
 heartbeats, durable sqlite queue, busyness- and size-aware routing (longer
