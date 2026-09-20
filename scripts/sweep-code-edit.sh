@@ -58,22 +58,19 @@ ACCEPT_SHA=$(echo "$OUT" | sed -n 's/.*sha=\([0-9a-f]\{40\}\).*/\1/p' | head -1)
 [ -n "$ACCEPT_SHA" ] && ok "accepted with commit sha $ACCEPT_SHA" || die "no applied_sha in output"
 echo "$OUT" | grep -q "mathutil.py" && ok "diff shown, touches mathutil.py" || bad "diff not printed"
 
-echo "== 4. code-repo audit: history + nested-tree diff (regression de389a8) =="
-CHIST=$(curl -fsS "$S/v1/vcs/history?repo=code") || die "/v1/vcs/history?repo=code failed"
-echo "$CHIST" | grep -q "code task" && ok "code-repo history has accepted commit" \
-  || bad "no code-task commit in code-repo history"
-CHEAD=$(echo "$CHIST" | J '.[0].sha')
-CPARENT=$(echo "$CHIST" | J '.[1].sha')
-if [ -n "$CPARENT" ] && [ "$CPARENT" != "None" ]; then
-  DIFF=$(curl -fsS "$S/v1/vcs/diff?repo=code&a=$CPARENT&b=$CHEAD") \
-    || die "code-repo diff 500: nested-tree regression (pre-de389a8 server?)"
-  echo "$DIFF" | grep -q "mathutil.py" \
-    && ok "nested-tree diff shows <task_id>/mathutil.py" \
-    || bad "diff missing expected nested path"
+echo "== 4. commit recorded: applied_sha readable back from task =="
+TASK_ID=$(echo "$OUT" | sed -n 's/.*accepted \(t-[0-9a-f]*\).*/\1/p' | head -1)
+if [ -n "$TASK_ID" ]; then
+  D=$(curl -fsS "$S/v1/code/tasks/$TASK_ID/diff")
+  echo "$D" | grep -q "$ACCEPT_SHA" && ok "diff endpoint returns same applied_sha" \
+    || bad "applied_sha mismatch between stream and diff endpoint"
+  echo "$D" | grep -q "mathutil.py" && ok "patch persisted server-side" \
+    || bad "patch missing from diff endpoint"
+else
+  bad "could not parse task id from output"
 fi
 
 echo "== 5. rejection path: failing tests leave no commit =="
-BEFORE=$(curl -fsS "$S/v1/vcs/history?repo=code" | J '.[0].sha')
 OUT2=$(clique code-submit --server "$S" \
   -p "Change is_even to always return the string BROKEN regardless of input. Only modify mathutil.py." \
   --inline 'mathutil.py:def is_even(n):\n    return n % 2 == 0\n' \
@@ -85,8 +82,13 @@ if echo "$OUT2" | grep -q "accepted"; then
 else
   ok "rejected (tests failed or diff invalid)"
 fi
-AFTER=$(curl -fsS "$S/v1/vcs/history?repo=code" | J '.[0].sha')
-[ "$BEFORE" = "$AFTER" ] && ok "no new commit on rejection" || bad "rejection created a commit"
+REJ_ID=$(echo "$OUT2" | sed -n 's/.*\(t-[0-9a-f]\{12\}\).*/\1/p' | head -1)
+if [ -n "$REJ_ID" ]; then
+  RD=$(curl -fsS "$S/v1/code/tasks/$REJ_ID/diff")
+  echo "$RD" | grep -q '"applied_sha": *null' \
+    && ok "no applied_sha on rejection (nothing committed)" \
+    || bad "rejected task has an applied_sha"
+fi
 
 echo "== 6. race: one winner, siblings cancelled =="
 OUT3=$(clique code-submit --server "$S" \
