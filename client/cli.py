@@ -6,6 +6,7 @@ to override. The rest (status, logs, leave) are local-only.
 
   clique                               button home: Host Join Chat Dashboard
   clique ui                            the same home screen, explicit
+  clique help                          this reference
 
 run one:
   clique serve [--foreground]          start the server in the background
@@ -18,7 +19,7 @@ run one:
 
 use it:
   clique submit PROMPT                 chat turn (sticky session by default)
-  clique code-submit -p TEXT -f FILE   code edit, test-verified before commit
+  clique code-submit -p TEXT -f P=FILE code edit, test-verified before commit
   clique task TASK_ID [--cancel]       inspect or cancel a task
   clique sessions [--show|--close ID]  list or manage chat sessions
   clique workspace --create|--watch    live shared workspaces
@@ -33,7 +34,7 @@ watch it:
 administer it (any joined node may):
   clique kick NODE_ID                  remove a node from the clique
   clique clear                         wipe sessions, queue, stored data
-  clique mcp install|status|serve|grow clique tools inside agent harnesses
+  clique mcp install|status|serve      clique tools inside agent harnesses
 
 The web UI is served by the server node at <server>/dash (live) and
 <server>/chat (ask it something); `clique dash` prints both links.
@@ -60,6 +61,20 @@ from client.sdk import CliqueClient
 app = typer.Typer(no_args_is_help=False, add_completion=False,
                    invoke_without_command=True)
 console = Console()
+
+_WORDMARK = ("▄▖▖ ▄▖\n"
+             "▌ ▌ ▐ ▛▌▌▌█▌\n"
+             "▙▖▙▖▟▖▙▌▙▌▙▖\n"
+             "       ▌")
+
+
+def _welcome() -> None:
+    """Greet the operator when this machine brings a node or server up.
+
+    Accent is the web UI's, so the terminal and the dashboard read as
+    one product.
+    """
+    console.print(f"\n[dim]welcome to the[/]\n[#6855ff]{_WORDMARK}[/]\n")
 
 
 @app.callback()
@@ -134,6 +149,7 @@ def serve(port: int = typer.Option(None, help="override server.api_port"),
     if foreground:
         from scheduler.server import main as server_main
         sys.argv = ["clique-server"] + extra
+        _welcome()
         server_main()
         return
 
@@ -150,6 +166,7 @@ def serve(port: int = typer.Option(None, help="override server.api_port"),
     except RuntimeError as e:
         console.print(f"[yellow]{e}[/] (`clique status` for details)")
         return
+    _welcome()
     console.print(
         f"[green]server started[/] (pid {info.pid}) on {bind_host}:{bind_port}\n"
         f"  [dim]clique status   ·   clique logs server -f   ·   clique stop[/]")
@@ -213,6 +230,7 @@ def join(server: str = typer.Option(None, help="server URL, skips mDNS"),
     if foreground:
         from node.agent import main as agent_main
         sys.argv = ["clique-agent"] + extra
+        _welcome()
         agent_main()
         return
 
@@ -228,6 +246,7 @@ def join(server: str = typer.Option(None, help="server URL, skips mDNS"),
     except RuntimeError as e:
         console.print(f"[yellow]{e}[/] (`clique status` for details)")
         return
+    _welcome()
     console.print(
         f"[green]joined[/] {resolved} (pid {info.pid}) as {display_name}\n"
         f"  [dim]clique status   ·   clique logs join -f   ·   clique leave[/]")
