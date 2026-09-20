@@ -116,8 +116,9 @@
       </div>
       <div id="sessions" class="card-scroll"></div>
     </div>
-    <div class="card"><h2>LEADERBOARD <span class="sidetitle">· tasks completed,
-      last 100</span></h2><div id="leaderboard" class="card-scroll"></div></div>
+    <div class="card"><h2>LEADERBOARD <span id="leaderTitle"
+      class="sidetitle"></span></h2>
+      <div id="leaderboard" class="card-scroll"></div></div>
   </div>
   <div class="col-right">
     <div class="card">
@@ -238,11 +239,23 @@ document.addEventListener('click', (e) => {
   if (live && live.dataset.task) watchTask(live.dataset.task);
 });
 
+// The newest N tasks that actually succeeded. /v1/tasks comes back
+// newest-first, so the window is a prefix -- which keeps the column
+// summing to at most N and stops queued or failed work from scoring.
+// The caption reads from the same constant so the two cannot drift
+// (a label claiming "last 100" over an uncapped count is the bug this
+// replaced).
+const LEADERBOARD_WINDOW = 100;
+$('leaderTitle').textContent = `· tasks completed, last ${LEADERBOARD_WINDOW}`;
+
 function renderLeaderboard(tasks, nodesById) {
   const counts = {};
+  let scored = 0;
   for (const t of tasks) {
-    if (!t.assigned_node) continue;
+    if (scored >= LEADERBOARD_WINDOW) break;
+    if (t.state !== 'succeeded' || !t.assigned_node) continue;
     counts[t.assigned_node] = (counts[t.assigned_node] || 0) + 1;
+    scored += 1;
   }
   const ranked = Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 8);
   if (!ranked.length) return empty('no tasks completed yet');
