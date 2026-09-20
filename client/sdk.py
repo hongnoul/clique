@@ -55,11 +55,28 @@ class CliqueClient:
     async def authenticate(self, data_dir: Path | None = None) -> str:
         """Register this device's keypair with the server to obtain a node
         token (required for op-gated routes). Reuses the agent identity
-        when one exists in data_dir."""
+        when one exists in data_dir.
+
+        Seamless: the token is cached at ``<data_dir>/node.token`` keyed
+        by server URL, so repeat CLI calls reuse it instead of minting a
+        new token per invocation. The user never sees or pastes a token.
+        """
         from common import protocol
         from common.config import DEFAULT_DIR, generate_or_load_keypair
         import socket
-        pub, seed = generate_or_load_keypair(data_dir or DEFAULT_DIR)
+        d = data_dir or DEFAULT_DIR
+        cache = d / "node.token"
+        if self.token is None and cache.exists():
+            try:
+                import json as _json
+                saved = _json.loads(cache.read_text())
+                if saved.get("server") == self.base_url and saved.get("token"):
+                    self.token = saved["token"]
+                    self.node_id = saved.get("node_id")
+                    return self.token
+            except Exception:
+                pass  # corrupt cache: fall through to fresh register
+        pub, seed = generate_or_load_keypair(d)
         name = socket.gethostname().split(".")[0]
         body = {"display_name": name, "public_key": pub,
                 "signature": protocol.sign_payload(name.encode(), seed),
@@ -67,6 +84,15 @@ class CliqueClient:
         data = await self._post("/v1/register", body)
         self.token = data["token"]
         self.node_id = data["node_id"]
+        try:
+            import json as _json
+            d.mkdir(parents=True, exist_ok=True)
+            cache.write_text(_json.dumps(
+                {"server": self.base_url, "token": self.token,
+                 "node_id": self.node_id}))
+            cache.chmod(0o600)
+        except Exception:
+            pass  # cache is best-effort; in-memory token still works
         return self.token
 
     # -- tasks ---------------------------------------------------------------

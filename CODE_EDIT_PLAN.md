@@ -185,5 +185,5 @@ story and demo audit.
 1. Canonical code-repo per clique or per submitter? Default: one
    `code-repo` per server, namespaced dirs per submitter.
 2. Binary files? MVP text only, reject NUL bytes.
-3. Private-repo token flow for URL inputs? Defer to post-demo, reuse
-   `CLIQUE_GITHUB_TOKEN` pattern from `join.sh`.
+3. Private-repo token flow for URL inputs? Deferred: closed system,
+   no GitHub in the join path (server serves /app.tgz itself).
