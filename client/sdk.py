@@ -29,7 +29,7 @@ class CliqueClient:
             raise ConnectionError("no clique server found on this network")
         return cls(f"http://{ann.api_address}")
 
-    async def _authed_request(self, method: str, path: str,
+    async def _authed_request(self, method: str, url: str,
                               body: dict | None = None,
                               **params) -> dict | list:
         """One request with silent re-auth on 401 (server restart).
@@ -48,11 +48,11 @@ class CliqueClient:
                     kw["params"] = params or None
                 elif method == "POST":
                     kw["json"] = body
-                return await fn(f"{self.base_url}{path}", **kw)
+                return await fn(f"{self.base_url}{url}", **kw)
 
         r = await _once()
         if (r.status_code == 401 and self.token
-                and not path == "/v1/register"):
+                and not url == "/v1/register"):
             self.token = None  # force fresh register, ignore stale cache
             try:
                 if self._data_dir is not None:
@@ -64,11 +64,11 @@ class CliqueClient:
         r.raise_for_status()
         return r.json()
 
-    async def _get(self, path: str, **params) -> dict | list:
-        return await self._authed_request("GET", path, **params)
+    async def _get(self, url: str, **params) -> dict | list:
+        return await self._authed_request("GET", url, **params)
 
-    async def _post(self, path: str, body: dict | None = None) -> dict:
-        return await self._authed_request("POST", path, body)  # type: ignore[return-value]
+    async def _post(self, url: str, body: dict | None = None) -> dict:
+        return await self._authed_request("POST", url, body)  # type: ignore[return-value]
 
     async def _delete(self, path: str) -> dict:
         return await self._authed_request("DELETE", path)  # type: ignore[return-value]
