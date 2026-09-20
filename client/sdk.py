@@ -436,8 +436,63 @@ class CliqueClient:
         return await self._get(f"/v1/workspaces/{workspace_id}/file",
                                path=path)
 
+    async def workspace_patch(self, workspace_id: str, path: str,
+                              ops: list[dict],
+                              base_version: int = 0) -> dict:
+        """One-shot sequenced write to the live workspace (socket VCS).
+
+        Stale ``base_version`` is rebased server-side, never rejected.
+        Returns the applied event: {version, seq, ops, rebased, ...}.
+        """
+        return await self._post(
+            f"/v1/workspaces/{workspace_id}/patch",
+            {"path": path, "base_version": base_version, "ops": ops})
+
+    async def workspace_write(self, workspace_id: str, path: str,
+                              text: str) -> dict:
+        """Replace one file's full content (convenience over workspace_patch).
+
+        Reads head version first so history records an honest base.
+        """
+        try:
+            st = await self.workspace_file(workspace_id, path)
+            base = int(st.get("version", 0))
+        except httpx.HTTPStatusError:
+            base = 0  # new file in the workspace
+        return await self.workspace_patch(
+            workspace_id, path,
+            [{"op": "replace_file", "text": text}], base_version=base)
+
     async def workspace_flush(self, workspace_id: str) -> dict:
         return await self._post(f"/v1/workspaces/{workspace_id}/flush")
+
+    async def workspace_watch(self, workspace_id: str,
+                              timeout_s: float = 0.0):
+        """Yield realtime workspace events over /ws/workspace/{id}.
+
+        First event is the snapshot, then deltas/presence as they land.
+        ``timeout_s`` > 0 stops the generator after that many seconds of
+        silence (useful for scripted verification); 0 waits forever.
+        """
+        import websockets as _ws
+        url = self.base_url.replace("http", "ws", 1) \
+            + f"/ws/workspace/{workspace_id}"
+        if self.token:
+            url += f"?token={self.token}"
+        wskw: dict = {}
+        if url.startswith("wss"):
+            import ssl
+            wskw["ssl"] = ssl.create_default_context()
+        async with _ws.connect(url, max_size=None, **wskw) as sock:
+            while True:
+                if timeout_s > 0:
+                    try:
+                        raw = await asyncio.wait_for(sock.recv(), timeout_s)
+                    except asyncio.TimeoutError:
+                        return
+                else:
+                    raw = await sock.recv()
+                yield json.loads(raw)
 
     async def workspace_history(self, workspace_id: str,
                                 path: str | None = None,

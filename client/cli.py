@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
+from pathlib import Path
 
 import httpx
 import typer
@@ -684,12 +685,24 @@ def workspace(list: bool = typer.Option(False, "--list", help="list workspaces")
                                        help="path inside workspace"),
               flush: str = typer.Option(None, "--flush",
                                         help="force git checkpoint"),
+              write: str = typer.Option(None, "--write",
+                                        help="workspace id to write into "
+                                             "(needs --file and --content "
+                                             "or --from)"),
+              content: str = typer.Option(None, "--content",
+                                          help="literal new file content"),
+              from_path: str = typer.Option(None, "--from",
+                                            help="local file to upload as "
+                                                 "the new content"),
+              watch: str = typer.Option(None, "--watch",
+                                        help="workspace id to stream live "
+                                             "events from (Ctrl-C to stop)"),
               history: str = typer.Option(None, "--history",
                                           help="recent op log for workspace id"),
               commits: str = typer.Option(None, "--commits",
                                           help="git checkpoint log for workspace id"),
               server: str = typer.Option(None)) -> None:
-    """Live realtime workspaces: create, list, snapshot, flush."""
+    """Live realtime workspaces: create, list, snapshot, write, watch, flush."""
     import json as _json
     client = _authed(server)
 
@@ -698,6 +711,29 @@ def workspace(list: bool = typer.Option(False, "--list", help="list workspaces")
             data = await client.workspace_create(
                 _json.loads(files) if files else {})
             console.print(f"[green]{data['workspace_id']}[/] seq={data['seq']}")
+        elif write:
+            if not file or (content is None and not from_path):
+                console.print("[red]--write needs --file and --content/--from[/]")
+                raise typer.Exit(2)
+            text = content if content is not None \
+                else Path(from_path).read_text()
+            ev = await client.workspace_write(write, file, text)
+            rb = " rebased" if ev.get("rebased") else ""
+            console.print(f"[green]wrote[/] {file} v{ev['version']}"
+                          f" seq={ev['seq']}{rb}")
+        elif watch:
+            async for ev in client.workspace_watch(watch):
+                t = ev.get("type", "?")
+                if t == "workspace.snapshot":
+                    console.print(f"[dim]snapshot seq={ev['seq']} files="
+                                  f"{list(ev.get('files', {}))}[/]")
+                elif t == "workspace.delta":
+                    rb = " [yellow]rebased[/]" if ev.get("rebased") else ""
+                    console.print(f"seq={ev['seq']} {ev['path']}"
+                                  f" v{ev['version']} by"
+                                  f" {str(ev.get('actor', ''))[:8]}{rb}")
+                else:
+                    console.print(f"[dim]{t}[/] {ev}")
         elif history:
             for h in await client.workspace_history(history, path=file):
                 rb = " [yellow]rebased[/]" if h["rebased"] else ""

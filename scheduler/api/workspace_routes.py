@@ -169,6 +169,33 @@ def register_workspace_routes(app: "FastAPI", server: "SchedulerServer") -> None
         except KeyError:
             raise HTTPException(404, "no such workspace")
 
+    @app.post("/v1/workspaces/{workspace_id}/patch")
+    async def patch_workspace(workspace_id: str, body: dict,
+                              request: Request) -> dict:
+        """One-shot sequenced write (same semantics as WS workspace.patch).
+
+        For CLI/MCP callers that don't hold a socket open. Body:
+        ``{"path", "base_version", "ops"}`` where ops follow the
+        insert/delete/replace_file grammar. Live WS subscribers still get
+        the delta broadcast, and running agents get workspace.invalidate.
+        """
+        from scheduler.api.rest import _actor
+        actor = _actor(server, request)
+        try:
+            server.live_workspaces.get(workspace_id)
+        except KeyError:
+            raise HTTPException(404, "no such workspace")
+        try:
+            event = await server.apply_workspace_patch(
+                workspace_id, body["path"],
+                int(body.get("base_version", 0)),
+                list(body.get("ops", [])), actor)
+        except (KeyError, TypeError):
+            raise HTTPException(422, "body needs path + ops[]")
+        except ValueError as e:
+            raise HTTPException(422, str(e))
+        return event
+
     @app.post("/v1/workspaces/{workspace_id}/flush")
     async def flush_workspace(workspace_id: str, request: Request) -> dict:
         from scheduler.api.rest import _actor

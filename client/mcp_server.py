@@ -31,7 +31,13 @@ mcp = MCPServer(
         "batch work, prefer clique_submit then clique_wait or "
         "clique_task_status so you can do other things in between. "
         "Code tasks (clique_code_task) run against provided files and "
-        "are verified with tests on the worker before commit."
+        "are verified with tests on the worker before commit. "
+        "Live workspaces (clique_workspace_*) are the clique's realtime "
+        "socket VCS: shared files with sequenced writes, rebase on "
+        "conflict, and git checkpoints. Use them to share context with "
+        "other agents and humans working the same files: read before "
+        "editing, write through the workspace so everyone sees your "
+        "change, and pass workspace_id to code tasks."
     ),
 )
 
@@ -205,6 +211,121 @@ async def clique_models() -> list[str]:
             if cand and cand not in seen:
                 seen.append(cand)
     return seen
+
+
+# ---------------------------------------------------------------------------
+# Live workspaces: the clique's realtime socket VCS (shared agent context)
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+async def clique_workspace_create(files: dict[str, str] | None = None) -> dict:
+    """Create a shared live workspace (realtime socket VCS).
+
+    `files` maps path -> initial content. Returns workspace_id + seq.
+    Every write by any agent is sequenced, broadcast live to WS
+    subscribers, and checkpointed to git on the server.
+    """
+    c = await _get_client()
+    return await c.workspace_create(files or {})
+
+
+@mcp.tool()
+async def clique_workspace_list() -> list[dict]:
+    """List live workspaces with their head seq."""
+    c = await _get_client()
+    return await c.workspaces()
+
+
+@mcp.tool()
+async def clique_workspace_read(workspace_id: str,
+                                path: str | None = None) -> dict:
+    """Read a workspace: full snapshot, or one file (with text + version)
+    when `path` is given. Always read before writing so your edit is
+    based on the latest shared state.
+    """
+    c = await _get_client()
+    if path:
+        return await c.workspace_file(workspace_id, path)
+    return await c.workspace(workspace_id)
+
+
+@mcp.tool()
+async def clique_workspace_write(workspace_id: str, path: str,
+                                 text: str) -> dict:
+    """Replace one file's content in the shared workspace. The write is
+    sequenced against the current head (stale bases are rebased, never
+    rejected) and broadcast to every live subscriber and running agent.
+    """
+    c = await _get_client()
+    return await c.workspace_write(workspace_id, path, text)
+
+
+@mcp.tool()
+async def clique_workspace_patch(workspace_id: str, path: str,
+                                 ops: list[dict],
+                                 base_version: int = 0) -> dict:
+    """Line-level patch of a workspace file. Ops:
+    {"op":"insert","line":N,"text":...}, {"op":"delete","line":N,"count":M},
+    {"op":"replace_file","text":...}. Lines are 1-indexed; pass the
+    version you read as base_version so concurrent edits rebase cleanly.
+    """
+    c = await _get_client()
+    return await c.workspace_patch(workspace_id, path, ops,
+                                   base_version=base_version)
+
+
+@mcp.tool()
+async def clique_workspace_history(workspace_id: str,
+                                   path: str | None = None,
+                                   limit: int = 50) -> list[dict]:
+    """Recent op log: who changed what, in global seq order, with
+    rebase flags. Use this to see other agents' live activity.
+    """
+    c = await _get_client()
+    return await c.workspace_history(workspace_id, path=path, limit=limit)
+
+
+@mcp.tool()
+async def clique_workspace_flush(workspace_id: str) -> dict:
+    """Force a git checkpoint of the workspace now; returns the sha."""
+    c = await _get_client()
+    return await c.workspace_flush(workspace_id)
+
+
+@mcp.tool()
+async def clique_workspace_task(prompt: str, workspace_id: str,
+                                paths: list[str] | None = None,
+                                test_cmd: list[str] | None = None,
+                                timeout_s: float = 600.0) -> dict:
+    """Run a verified code-edit task against live workspace files.
+
+    The worker sees the current shared content at submit time and gets
+    invalidation pushes if files move mid-task. On success the diff is
+    committed and the workspace is flushed, so other agents see the
+    result immediately.
+    """
+    c = await _get_client()
+    snap = await c.workspace(workspace_id)
+    files: dict[str, str] = {}
+    for p, f in snap.get("files", {}).items():
+        if paths and p not in paths:
+            continue
+        text = f.get("text")
+        if text is None:
+            text = (await c.workspace_file(workspace_id, p))["text"]
+        files[p] = text
+    task_id = await c.code_submit(prompt, files, test_cmd=test_cmd,
+                                  workspace_id=workspace_id)
+    try:
+        view = await c.wait(task_id, timeout_s=timeout_s)
+    except TimeoutError:
+        return {"task_id": task_id, "state": "running", "timed_out": True}
+    result = _view_dict(view)
+    try:
+        result["diff"] = await c.code_diff(task_id)
+    except Exception:
+        pass
+    return result
 
 
 def main() -> None:

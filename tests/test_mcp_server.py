@@ -168,3 +168,45 @@ async def test_entry_point_wired():
         (Path(__file__).parent.parent / "pyproject.toml").read_text())
     assert py["project"]["scripts"]["clique-mcp"] == \
         "client.mcp_server:main"
+
+
+async def test_workspace_tools_listed():
+    tools = {t.name for t in await mcp_mod.mcp.list_tools()}
+    assert {"clique_workspace_create", "clique_workspace_list",
+            "clique_workspace_read", "clique_workspace_write",
+            "clique_workspace_patch", "clique_workspace_history",
+            "clique_workspace_flush", "clique_workspace_task"} <= tools
+
+
+async def test_workspace_shared_context_roundtrip(clique):
+    """Two 'agents' (MCP writer + raw SDK reader) share one live workspace."""
+    base, _server = clique
+    ws = await call("clique_workspace_create",
+                    {"files": {"main.py": "x = 1\n"}})
+    wid = ws["workspace_id"]
+
+    # agent A writes through MCP
+    ev = await call("clique_workspace_write",
+                    {"workspace_id": wid, "path": "main.py",
+                     "text": "x = 2\n"})
+    assert ev["seq"] == 2 and ev["version"] == 2
+
+    # agent B (separate authenticated client) sees the write immediately
+    other = CliqueClient(base)
+    await other.authenticate()
+    st = await other.workspace_file(wid, "main.py")
+    assert st["text"] == "x = 2\n" and st["version"] == 2
+
+    # agent B patches a line; agent A observes via history
+    await other.workspace_patch(
+        wid, "main.py", [{"op": "insert", "line": 2, "text": "y = 3\n"}],
+        base_version=st["version"])
+    hist = await call("clique_workspace_history", {"workspace_id": wid})
+    assert [h["seq"] for h in hist] == [2, 3]  # seq 1 = create seed, not an op
+    read = await call("clique_workspace_read",
+                      {"workspace_id": wid, "path": "main.py"})
+    assert read["text"] == "x = 2\ny = 3\n"
+
+    # git checkpoint works
+    flush = await call("clique_workspace_flush", {"workspace_id": wid})
+    assert flush["sha"]
