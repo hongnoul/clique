@@ -87,6 +87,19 @@ class ContextStore:
         kept.reverse()
         return json.dumps(kept).encode()
 
+    def render_prompt(self, session_id: str, context_window: int) -> str:
+        """Format truncated session turns as the worker prompt.
+
+        The current user turn is already in the store (appended at submit),
+        so callers must not append it again. Empty sessions yield "".
+        """
+        turns = json.loads(self.truncate_for_model(session_id, context_window))
+        if not turns:
+            return ""
+        return "\n".join(
+            f"{t.get('role', 'user')}: {t.get('content', '')}" for t in turns
+        )
+
     def delete(self, session_id: str) -> None:
         self._db.execute(
             "DELETE FROM context_turns WHERE session_id=?", (session_id,))

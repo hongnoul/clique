@@ -1,7 +1,11 @@
 """Router (MVP implementation).
 
-Policy per SPEC.md / vision dump:
+Policy:
 - one task per node at a time
+- explicit model_hint is a hard cluster filter (prefix of cluster_key);
+  omit it for auto (size / capabilities / busyness)
+- sessions stay inside their cluster; prefer the pinned replica if it is
+  ready, otherwise hop to any ready node in that cluster
 - longer prompts prefer bigger models (parameter_count_b, context fit)
 - busyness-aware: skip busy nodes, deprioritize loaded/battery nodes
 - explainable scoring: score() is pure and returns a reason string
@@ -48,8 +52,10 @@ CREATE INDEX IF NOT EXISTS idx_tasks_state ON tasks(state);
 class Router:
     def __init__(self, registry, db_path: Path | str, *,
                  lease_seconds: float = 120.0, max_attempts: int = 3,
-                 queue_cap: int = 1000) -> None:
+                 queue_cap: int = 1000, sessions=None, contexts=None) -> None:
         self.registry = registry
+        self.sessions = sessions
+        self.contexts = contexts
         self.lease_seconds = lease_seconds
         self.max_attempts = max_attempts
         self.queue_cap = queue_cap
@@ -86,27 +92,63 @@ class Router:
 
     # -- scoring ---------------------------------------------------------------
 
+    def _placement(self, request: TaskRequest) -> tuple[str | None, str | None]:
+        """Return (cluster_prefix, preferred_node). Session cluster wins over hint."""
+        cluster = request.model_hint
+        preferred = None
+        if request.session_id and self.sessions is not None:
+            try:
+                session = self.sessions.get(request.session_id)
+            except KeyError:
+                session = None
+            if session is not None:
+                if session.cluster_key:
+                    cluster = session.cluster_key
+                preferred = session.pinned_node
+        return cluster or None, preferred
+
+    def _worker_prompt(self, request: TaskRequest, node: NodeInfo) -> str:
+        """Prompt the node should actually run. Session turns are replayed
+        from the server context store, truncated to this model's window."""
+        model = node.model
+        if (request.session_id and self.contexts is not None
+                and model is not None):
+            rendered = self.contexts.render_prompt(
+                request.session_id, model.context_window)
+            if rendered:
+                return rendered
+        return request.prompt
+
     @staticmethod
-    def score(request: TaskRequest, node: NodeInfo) -> tuple[float, str]:
-        """Pure scoring; higher is better. Returns (score, reason)."""
+    def score(request: TaskRequest, node: NodeInfo, *,
+              prompt: str | None = None,
+              preferred_node: str | None = None) -> tuple[float, str]:
+        """Pure scoring; higher is better. Returns (score, reason).
+
+        Cluster membership is a hard filter in schedule_pending, not a
+        score term. preferred_node is a soft pin (ready replica only).
+        """
         model = node.model
         assert model is not None
         reasons = []
-        prompt_tokens = request.est_prompt_tokens()
+        prompt_tokens = request.est_prompt_tokens(prompt)
 
         # hard-ish fit: prompt must fit context (leave room for output)
         if prompt_tokens + request.max_output_tokens > model.context_window:
             return (-1e9, "prompt exceeds context window")
 
-        # model_hint: strong preference for matching cluster
         score = 0.0
-        if request.model_hint:
-            if model.cluster_key().startswith(request.model_hint):
-                score += 1000.0
-                reasons.append(f"matches hint {request.model_hint}")
-            else:
-                score -= 500.0
-                reasons.append("does not match model hint")
+        if preferred_node and node.node_id == preferred_node:
+            score += 5000.0
+            reasons.append("pinned replica")
+
+        caps = model.capabilities or []
+        if request.task_type in caps:
+            score += 200.0
+            reasons.append(f"capability {request.task_type.value}")
+        else:
+            score -= 80.0
+            reasons.append(f"no {request.task_type.value} capability")
 
         # longer prompts -> bigger models: weight model size by prompt length
         length_factor = min(prompt_tokens / 1000.0, 4.0)
@@ -140,7 +182,11 @@ class Router:
     # -- scheduling --------------------------------------------------------------
 
     def schedule_pending(self) -> list[tuple[TaskAssignment, TaskRequest]]:
-        """Match queued tasks to ready nodes. One task per node."""
+        """Match queued tasks to ready nodes. One task per node.
+
+        The TaskRequest on each assignment is a wire copy: session tasks
+        have history replayed into ``prompt``. The queued row is unchanged.
+        """
         ready = {n.node_id: n for n in self.registry.ready_nodes()}
         # exclude nodes already holding an active assignment in our table
         rows = self._db.execute(
@@ -158,11 +204,29 @@ class Router:
             if not ready:
                 break
             request = TaskRequest.model_validate_json(req_json)
-            scored = sorted(
-                ((self.score(request, n), n) for n in ready.values()),
-                key=lambda t: t[0][0], reverse=True,
-            )
-            (best_score, reason), best = scored[0]
+            cluster, preferred = self._placement(request)
+            candidates = list(ready.values())
+            if cluster:
+                matched = [
+                    n for n in candidates
+                    if n.model is not None
+                    and n.model.cluster_key().startswith(cluster)
+                ]
+                if not matched:
+                    continue  # wait for this cluster; do not steal another
+                candidates = matched
+            # pin is preference: if it is not in candidates (busy/offline/
+            # wrong cluster), we just score the rest and hop
+            scored: list[tuple[tuple[float, str], NodeInfo, str]] = []
+            for n in candidates:
+                worker_prompt = self._worker_prompt(request, n)
+                scored.append((
+                    self.score(request, n, prompt=worker_prompt,
+                               preferred_node=preferred),
+                    n, worker_prompt,
+                ))
+            scored.sort(key=lambda t: t[0][0], reverse=True)
+            (best_score, reason), best, worker_prompt = scored[0]
             if best_score <= -1e9:
                 continue  # no eligible node for this task; try next task
             attempt_id = f"a-{uuid.uuid4().hex[:10]}"
@@ -174,11 +238,13 @@ class Router:
             )
             self._db.commit()
             del ready[best.node_id]
+            wire = request.model_copy()
+            wire.prompt = worker_prompt
             out.append((TaskAssignment(
                 task_id=request.task_id, attempt_id=attempt_id,
                 node_id=best.node_id, lease_expires_at=lease,
                 reason=reason,
-            ), request))
+            ), wire))
         return out
 
     def mark_running(self, task_id: str, attempt_id: str) -> None:

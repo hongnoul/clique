@@ -243,5 +243,7 @@ async def test_clusters_view(clique):
     base, _, _ = clique
     async with httpx.AsyncClient() as c:
         clusters = (await c.get(base + "/v1/clusters")).json()
+        info = (await c.get(base + "/v1/clique")).json()
     keys = {c["cluster_key"] for c in clusters}
     assert "echo-7b-none" in keys and "echo-70b-none" in keys
+    assert {c["cluster_key"] for c in info["clusters"]} == keys

@@ -97,6 +97,8 @@ class SchedulerServer:
             db, self.registry, policy=config.server.permission_policy)
         self.contexts = ContextStore(db)
         self.sessions = SessionManager(db, self.contexts, self.registry)
+        self.router.sessions = self.sessions
+        self.router.contexts = self.contexts
         self.cron = CronService(db, self.router, self.permissions)
         self.suggestions = SuggestionEngine(self.registry, self.router)
         self.vcs = VcsService(config.node.data_dir / "state-repo")
@@ -129,7 +131,7 @@ class SchedulerServer:
             version = self.contexts.latest_version(request.session_id)
             self.sessions.append_turn(
                 request.session_id, version, "user", request.prompt)
-            if not request.model_hint and session.cluster_key:
+            if session.cluster_key:
                 request.model_hint = session.cluster_key
         try:
             task_id = self.router.submit(request)
@@ -243,7 +245,9 @@ class SchedulerServer:
         async def clique() -> dict:
             return {"name": self.config.server.clique_name,
                     "default_model": self.config.server.default_model,
-                    "policy": self.permissions.policy}
+                    "policy": self.permissions.policy,
+                    "clusters": [c.model_dump(mode="json")
+                                 for c in self.registry.list_clusters()]}
 
         @app.get("/v1/stats")
         async def stats() -> dict:
@@ -424,6 +428,15 @@ class SchedulerServer:
             self.registry.set_status(
                 assignment.node_id, NodeStatus.BUSY,
                 current_task_id=assignment.task_id)
+            if request.session_id:
+                try:
+                    self.sessions.pin(request.session_id, assignment.node_id)
+                    node = self.registry.get(assignment.node_id)
+                    if node and node.model:
+                        self.sessions.bind_cluster(
+                            request.session_id, node.model.cluster_key())
+                except KeyError:
+                    pass
             await self.events.publish("task.assigned", {
                 "task_id": assignment.task_id, "node_id": assignment.node_id,
                 "reason": assignment.reason})

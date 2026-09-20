@@ -112,13 +112,14 @@ class TaskRequest(BaseModel):
     task_type: TaskType = TaskType.CHAT
     prompt: str
     session_id: str | None = None
-    model_hint: str | None = None  # cluster_key prefix match
+    model_hint: str | None = None  # cluster_key prefix; hard filter when set (omit for auto)
     max_output_tokens: int = 1024
     idempotency_key: str
     created_at: datetime = Field(default_factory=utcnow)
 
-    def est_prompt_tokens(self) -> int:
-        return max(1, len(self.prompt) // 4)
+    def est_prompt_tokens(self, text: str | None = None) -> int:
+        src = self.prompt if text is None else text
+        return max(1, len(src) // 4)
 
 
 class TaskAssignment(BaseModel):

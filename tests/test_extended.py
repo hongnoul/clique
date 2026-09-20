@@ -154,11 +154,51 @@ async def test_session_lifecycle_and_context(clique):
         node = server.registry.get(data["assigned_node"])
         assert node.model.cluster_key() == "echo-7b-none"
 
+        # next turn replays server-held history onto the worker prompt
+        req2 = TaskRequest(prompt="follow-up turn", session_id=sid,
+                           idempotency_key=uuid.uuid4().hex)
+        tid2 = (await c.post(base + "/v1/tasks",
+                             json=req2.model_dump(mode="json"))).json()["task_id"]
+        data2 = await wait_done(base, tid2)
+        assert data2["state"] == "succeeded"
+        assert "hello session" in data2["result"]["output"]
+        assert "follow-up turn" in data2["result"]["output"]
+        assert data2["assigned_node"]  # hop allowed; any 7B replica is fine
+        node2 = server.registry.get(data2["assigned_node"])
+        assert node2.model.cluster_key() == "echo-7b-none"
+
         # close
         r = await c.delete(f"{base}/v1/sessions/{sid}", headers=op_hdr)
         assert r.json()["closed"]
         active = (await c.get(base + "/v1/sessions")).json()
         assert sid not in [s["session_id"] for s in active]
+
+
+@pytest.mark.asyncio
+async def test_sticky_cli_session_remembers_turns(clique, tmp_path):
+    """Consecutive submits through ensure_chat_session replay history."""
+    base, _, _ = clique
+    from client.sdk import CliqueClient
+    store = tmp_path / "cli-sessions.json"
+    client = CliqueClient(base)
+    await client.authenticate(data_dir=tmp_path / "cli-id")
+    sid = await client.ensure_chat_session("echo-7b-none", store_path=store)
+    again = await client.ensure_chat_session("echo-7b-none", store_path=store)
+    assert again == sid
+
+    tid1 = await client.submit("remember my favorite color is red",
+                               session_id=sid)
+    data1 = await wait_done(base, tid1)
+    assert data1["state"] == "succeeded"
+
+    tid2 = await client.submit("what is my favorite color", session_id=sid)
+    data2 = await wait_done(base, tid2)
+    assert data2["state"] == "succeeded"
+    assert "favorite color is red" in data2["result"]["output"]
+
+    fresh = await client.ensure_chat_session("echo-7b-none", store_path=store,
+                                             reset=True)
+    assert fresh != sid
 
 
 @pytest.mark.asyncio

@@ -5,7 +5,7 @@ Commands:
   clique join [--server URL] ...     run an agent on this device
   clique nodes [--server URL]        list nodes and clusters
   clique dash [--server URL] [--full]  live terminal dashboard (polls /dash.txt)
-  clique submit PROMPT               submit a task and stream to done
+  clique submit PROMPT               chat turn (sticky session by default)
   clique task TASK_ID [--cancel]     inspect or cancel a task
   clique stats                       queue and node stats
 """
@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 
+import httpx
 import typer
 from rich.console import Console
 from rich.table import Table
@@ -92,15 +93,45 @@ def nodes(server: str = typer.Option(None)) -> None:
 @app.command()
 def submit(prompt: str,
            server: str = typer.Option(None),
-           model: str = typer.Option(None, "--model", help="model hint (cluster key prefix)"),
+           model: str = typer.Option(
+               None, "--model",
+               help="cluster key prefix (hard filter). omit for auto routing"),
+           task_type: str = typer.Option(
+               "chat", "--type",
+               help="chat | code_generation | summarization | embedding | other"),
+           session: str = typer.Option(
+               None, "--session", help="session id (default: sticky CLI session)"),
+           new_session: bool = typer.Option(
+               False, "--new-session", help="start a fresh sticky session"),
+           no_session: bool = typer.Option(
+               False, "--no-session", help="one-shot task, no conversation memory"),
            max_tokens: int = typer.Option(1024)) -> None:
-    """Submit a task and wait for the result."""
+    """Submit a chat turn and wait for the result.
+
+    Consecutive submits reuse a sticky session so the model remembers
+    earlier turns. Pass --no-session for a stateless one-shot.
+    """
     client = _resolve(server)
 
     async def run() -> None:
-        task_id = await client.submit(prompt, model_hint=model,
-                                      max_output_tokens=max_tokens)
-        console.print(f"[dim]task {task_id} submitted[/]")
+        sid = session
+        if no_session:
+            sid = None
+        elif not sid:
+            await client.authenticate()
+            sid = await client.ensure_chat_session(
+                model or "", reset=new_session)
+        try:
+            task_id = await client.submit(prompt, model_hint=model,
+                                          task_type=task_type,
+                                          session_id=sid,
+                                          max_output_tokens=max_tokens)
+        except httpx.HTTPStatusError as e:
+            console.print(f"[red]submit failed[/]: {e.response.status_code} "
+                          f"{e.response.text[:200]}")
+            raise typer.Exit(1) from e
+        extra = f" session {sid}" if sid else ""
+        console.print(f"[dim]task {task_id}{extra} submitted[/]")
         shown = 0
         while True:
             data = await client.task(task_id)
@@ -216,7 +247,9 @@ def sessions(server: str = typer.Option(None),
                 raise typer.BadParameter("--migrate needs --to-node")
             console.print(await client.migrate_session(migrate, to_node))
         elif close:
-            console.print(await client.close_session(close))
+            await client.close_session(close)
+            client.forget_chat_session(close)
+            console.print({"closed": True})
         else:
             table = Table(title="active sessions")
             for col in ("id", "cluster", "pinned", "version", "owner"):

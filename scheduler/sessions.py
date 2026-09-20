@@ -39,9 +39,9 @@ class SessionManager:
     # -- lifecycle ------------------------------------------------------------
 
     def create(self, owner_node: str, cluster_key: str) -> Session:
-        """Open a session. Pinning happens lazily: the router picks a node
-        on the first task; context lives in the ContextStore from turn one
-        so migration is possible later without asking the pinned node."""
+        """Open a session bound to one cluster. Context lives on the server
+        so any ready replica in that cluster can take the next turn.
+        Pinning is a preference, not a lock."""
         session = Session(
             session_id=f"s-{uuid.uuid4().hex[:12]}",
             owner_node=owner_node, cluster_key=cluster_key)
@@ -64,10 +64,22 @@ class SessionManager:
             "SELECT session_id FROM sessions WHERE active=1").fetchall()
         return [self.get(sid) for (sid,) in rows]
 
-    def pin(self, session_id: str, node_id: str) -> Session:
-        """Record the node the router chose for this session's tasks."""
+    def bind_cluster(self, session_id: str, cluster_key: str) -> Session:
+        """Lock an unbound session to the cluster that served its first turn."""
         session = self.get(session_id)
-        if session.pinned_node is None:
+        if not session.cluster_key and cluster_key:
+            session.cluster_key = cluster_key
+            self._save(session)
+        return session
+
+    def pin(self, session_id: str, node_id: str) -> Session:
+        """Record (or move) the replica this session last ran on.
+
+        Preference only: the router will hop to another ready node in the
+        same cluster when the pin is busy or gone.
+        """
+        session = self.get(session_id)
+        if session.pinned_node != node_id:
             session.pinned_node = node_id
             self._save(session)
         return session

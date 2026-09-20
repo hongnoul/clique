@@ -15,7 +15,7 @@ from typing import AsyncIterator
 import httpx
 
 from common.errors import ModelNotReadyError
-from common.types import ModelSpec
+from common.types import ModelSpec, TaskType
 
 
 class BaseRuntime:
@@ -111,6 +111,19 @@ def build_runtime(runtime: str, base_url: str = "", model_name: str = "") -> Bas
     raise ModelNotReadyError(f"unknown runtime: {runtime}")
 
 
+def capabilities_for_family(family: str) -> list[TaskType]:
+    """Cheap capability tags from the model family name, used by auto routing."""
+    name = family.lower()
+    if any(k in name for k in ("embed", "nomic", "e5-", "bge")):
+        return [TaskType.EMBEDDING]
+    caps = [TaskType.CHAT]
+    if any(k in name for k in ("coder", "code", "starcoder", "deepseek")):
+        caps.append(TaskType.CODE_GENERATION)
+    if any(k in name for k in ("summari",)):
+        caps.append(TaskType.SUMMARIZATION)
+    return caps
+
+
 def spec_from_config(cfg: "NodeConfig") -> ModelSpec:  # noqa: F821
     from common.config import NodeConfig  # noqa: F401
     return ModelSpec(
@@ -118,4 +131,5 @@ def spec_from_config(cfg: "NodeConfig") -> ModelSpec:  # noqa: F821
         parameter_count_b=cfg.model_parameter_b,
         runtime=cfg.model_runtime,
         context_window=cfg.context_window,
+        capabilities=capabilities_for_family(cfg.model_family),
     )

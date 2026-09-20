@@ -45,17 +45,21 @@ function badge(s) { return `<span class="badge ${s}">${s}</span>`; }
 
 async function refresh() {
   try {
-    const [clique, nodes, tasks, sessions, suggestions, perms, cron, vcs] =
+    const [clique, nodes, tasks, sessions, suggestions, perms, cron, vcs, clusters] =
       await Promise.all([
         j('/v1/clique'), j('/v1/nodes'), j('/v1/tasks'), j('/v1/sessions'),
         j('/v1/suggestions'), j('/v1/permissions'), j('/v1/cron'),
-        j('/v1/vcs/history?limit=10')]);
-    $('cliqueName').textContent = `· ${clique.name} · policy ${clique.policy}`;
+        j('/v1/vcs/history?limit=10'), j('/v1/clusters')]);
+    const clusterKeys = (clusters || []).map(c =>
+      `${c.cluster_key}×${(c.node_ids || []).length}`).join(' · ')
+      || 'no clusters';
+    $('cliqueName').textContent =
+      `· ${clique.name} · policy ${clique.policy} · ${clusterKeys}`;
     $('nodes').innerHTML = '<table><tr><th>name</th><th>status</th><th>op</th>'
-      + '<th>model</th><th>task</th></tr>'
+      + '<th>cluster</th><th>task</th></tr>'
       + nodes.map(n => `<tr><td>${n.display_name}</td><td>${badge(n.status)}</td>`
         + `<td class="${n.op_level}">${n.op_level}</td>`
-        + `<td>${n.model ? n.model.family + ' ' + n.model.parameter_count_b + 'B' : '-'}</td>`
+        + `<td>${n.model ? n.model.family + '-' + n.model.parameter_count_b + 'b' : '-'}</td>`
         + `<td>${n.current_task_id ? n.current_task_id.slice(0,10) : '-'}</td></tr>`)
         .join('') + '</table>';
     $('tasks').innerHTML = '<table><tr><th>id</th><th>state</th><th>node</th>'

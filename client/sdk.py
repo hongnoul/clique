@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import uuid
 from pathlib import Path
 
@@ -126,6 +127,56 @@ class CliqueClient:
 
     async def session(self, session_id: str) -> dict:
         return await self._get(f"/v1/sessions/{session_id}")
+
+    async def ensure_chat_session(self, cluster_key: str = "", *,
+                                  store_path: Path | None = None,
+                                  reset: bool = False) -> str:
+        """Reuse the sticky CLI session for this server, or create one.
+
+        Session ids are stored per server URL in ``~/.clique/cli-sessions.json``
+        so consecutive ``clique submit`` calls share transcript context.
+        """
+        from common.config import DEFAULT_DIR
+        path = store_path or (DEFAULT_DIR / "cli-sessions.json")
+        store: dict = {}
+        if path.exists():
+            try:
+                store = json.loads(path.read_text())
+            except json.JSONDecodeError:
+                store = {}
+        key = self.base_url
+        entry = store.get(key) or {}
+        sid = entry.get("session_id") if isinstance(entry, dict) else None
+        if sid and not reset:
+            try:
+                await self.session(sid)
+                return sid
+            except httpx.HTTPStatusError:
+                pass
+        if not self.token:
+            await self.authenticate()
+        created = await self.create_session(cluster_key)
+        sid = created["session_id"]
+        store[key] = {"session_id": sid, "cluster_key": cluster_key}
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(store, indent=2))
+        return sid
+
+    def forget_chat_session(self, session_id: str | None = None,
+                            store_path: Path | None = None) -> None:
+        """Drop the sticky CLI session if it matches ``session_id`` (or always)."""
+        from common.config import DEFAULT_DIR
+        path = store_path or (DEFAULT_DIR / "cli-sessions.json")
+        if not path.exists():
+            return
+        try:
+            store = json.loads(path.read_text())
+        except json.JSONDecodeError:
+            return
+        entry = store.get(self.base_url) or {}
+        if session_id is None or entry.get("session_id") == session_id:
+            store.pop(self.base_url, None)
+            path.write_text(json.dumps(store, indent=2))
 
     async def migrate_session(self, session_id: str, to_node: str,
                               reason: str = "") -> dict:
