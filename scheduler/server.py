@@ -165,9 +165,7 @@ main() {
             ;;
     esac
 
-    if command -v "$BIN_DIR/clique" >/dev/null 2>&1; then
-        "$BIN_DIR/clique" --help >/dev/null 2>&1 || err "install check failed ('clique --help')"
-    fi
+    "$BIN_DIR/clique" --help >/dev/null 2>&1 || err "install check failed ('clique --help')"
 
     echo ""
     log "ready. run 'clique onboard --server $CLIQUE_SERVER' to join."
