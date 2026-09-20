@@ -5,64 +5,157 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>clique dashboard</title>
 <style>
-  :root { color-scheme: dark; }
+  :root {
+    --accent: #6855ff;
+    --bg: #0d1117; --fg: #c9d1d9; --card-bg: #161b22; --border: #30363d;
+    --link: #58a6ff; --muted: #8b949e; --hover-bg: #21262d;
+    color-scheme: dark;
+  }
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]) {
+      --bg: #f6f8fa; --fg: #24292f; --card-bg: #ffffff; --border: #d0d7de;
+      --link: #0969da; --muted: #57606a; --hover-bg: #eef1f4;
+      color-scheme: light;
+    }
+  }
+  :root[data-theme="light"] {
+    --bg: #f6f8fa; --fg: #24292f; --card-bg: #ffffff; --border: #d0d7de;
+    --link: #0969da; --muted: #57606a; --hover-bg: #eef1f4;
+    color-scheme: light;
+  }
+
+  html, body { height: 100%; }
   body { font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-         background: #0d1117; color: #c9d1d9; margin: 0; padding: 1rem; }
-  h1 { font-size: 1.1rem; } h2 { font-size: .95rem; color: #58a6ff; }
-  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
-          gap: 1rem; }
-  .card { background: #161b22; border: 1px solid #30363d; border-radius: 8px;
+         background: var(--bg); color: var(--fg); margin: 0; padding: 1rem;
+         box-sizing: border-box; transition: background .15s, color .15s;
+         display: flex; flex-direction: column; }
+  h2 { font-size: .95rem; color: var(--accent); margin: 0 0 .5rem; }
+  .card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 0;
           padding: .8rem 1rem; }
   table { border-collapse: collapse; width: 100%; font-size: .8rem; }
-  th, td { text-align: left; padding: .25rem .5rem; border-bottom: 1px solid #21262d; }
-  .badge { padding: 0 .4em; border-radius: 4px; font-size: .75rem; }
+  th, td { text-align: left; padding: .25rem .5rem; border-bottom: 1px solid var(--border); }
+  th { color: var(--accent); }
+  .badge { padding: 0 .4em; border-radius: 0; font-size: .75rem; color: #fff; }
   .ready { background: #1f6f3f; } .busy { background: #9e6a03; }
   .offline { background: #6e1f1f; } .joining { background: #30363d; }
-  .op { color: #d2a8ff; } .owner { color: #ffa657; }
-  .sugg { border-left: 3px solid #d29922; padding-left: .6rem; margin: .4rem 0; }
-  #events { max-height: 14rem; overflow-y: auto; font-size: .72rem; color: #8b949e; }
-  #liveOut { max-height: 16rem; overflow-y: auto; font-size: .78rem;
-             white-space: pre-wrap; word-break: break-word; }
-  tr.live { cursor: pointer; } tr.live:hover td { background: #21262d; }
-  tr.watching td { background: #1c2b1c; }
-  .muted { color: #8b949e; }
+  .op { color: #8250df; } .owner { color: #bc4c00; }
+  .muted { color: var(--muted); }
+
+  /* header: logo top-left (larger; it already says "clique"), menu top-right */
+  header { display: flex; align-items: center; justify-content: space-between;
+           gap: .8rem; margin-bottom: 1.4rem; padding: .3rem 0; position: relative;
+           flex: none; }
+  .brand { display: flex; align-items: center; color: var(--fg); }
+  #logo { height: 96px; display: block; }
+  #logo svg { height: 100%; width: auto; display: block; }
+  .header-actions { display: flex; align-items: center; gap: .5rem; position: relative; }
+
+  /* mascot: a small live companion parked in the corner, not squeezed
+     into the header next to the (already eye-shaped) static logo */
+  #mascot { position: fixed; right: 2rem; bottom: 2rem; width: 84px; height: 72px;
+            z-index: 20; cursor: pointer; }
+  #mascot svg { width: 100%; height: 100%; display: block; }
+
+  .icon-btn { background: var(--card-bg); border: 1px solid var(--border); color: var(--fg);
+              border-radius: 0; padding: .55rem .9rem; font-size: 1.3rem;
+              cursor: pointer; line-height: 1; }
+  .icon-btn:hover { border-color: var(--accent); color: var(--accent); }
+  #themeBtn svg { height: 1.15rem; width: auto; display: block; }
+  .menu-panel { position: absolute; top: calc(100% + .4rem); right: 0;
+                background: var(--card-bg); border: 1px solid var(--border); border-radius: 0;
+                min-width: 160px; padding: .3rem; box-shadow: 0 8px 24px rgba(0,0,0,.4);
+                z-index: 10; }
+  .menu-panel[hidden] { display: none; }
+  .menu-item { display: flex; align-items: center; justify-content: space-between;
+               gap: .5rem; padding: .45rem .6rem; border-radius: 0; font-size: .85rem;
+               color: var(--fg); text-decoration: none; }
+  .menu-item[aria-disabled="true"] { color: var(--muted); cursor: default; }
+  .menu-item:not([aria-disabled="true"]):hover { background: var(--hover-bg); }
+  .soon { font-size: .65rem; border: 1px solid var(--border); border-radius: 0;
+          padding: 0 .35rem; color: var(--muted); }
+
+  /* main layout: nodes/sessions/leaderboard left, queue right -- the
+     whole layout fills the remaining viewport height below the header,
+     and every table scrolls internally within its own card rather than
+     the card growing to fit its content. */
+  .layout { flex: 1; min-height: 0; display: grid; grid-template-columns: 1.1fr .9fr;
+            gap: 1rem; }
+  .col-left { display: flex; flex-direction: column; gap: 1rem; min-height: 0; }
+  .col-left .card, .col-right, .col-right .card {
+    display: flex; flex-direction: column; min-height: 0; flex: 1; }
+  .card > div:last-child { flex: 1; overflow-y: auto; min-height: 0; }
+  @media (max-width: 900px) {
+    .layout { display: flex; flex-direction: column; height: auto; }
+    .col-left, .col-right { flex: none; }
+    .card > div:last-child { max-height: 320px; }
+  }
+
+  .medal { font-size: .95rem; font-weight: 700; }
+  .medal.gold { color: #d4af37; } .medal.silver { color: #a8a9ad; } .medal.bronze { color: #cd7f32; }
 </style>
 </head>
 <body>
-<h1>clique <span id="cliqueName" class="muted"></span></h1>
-<div class="grid">
-  <div class="card"><h2>Devices</h2><div id="nodes"></div></div>
-  <div class="card"><h2>Queue</h2><div id="tasks"></div>
-    <span class="muted">click a running task to watch its live output</span></div>
-  <div class="card" style="grid-column: 1 / -1"><h2>Live output
-    <span id="liveTask" class="muted"></span></h2>
-    <div id="liveOut"><span class="muted">no task watched</span></div></div>
-  <div class="card"><h2>Sessions</h2><div id="sessions"></div></div>
-  <div class="card"><h2>Suggestions</h2><div id="suggestions"></div></div>
-  <div class="card"><h2>Live workspaces</h2><div id="workspaces"></div></div>
-  <div class="card"><h2>Snapshots</h2><div id="vcs"></div></div>
-  <div class="card" style="grid-column: 1 / -1"><h2>Live events</h2>
-    <div id="events"></div></div>
+<header>
+  <div class="brand">
+    <div id="logo" aria-label="clique"></div>
+  </div>
+  <div class="header-actions">
+    <button id="themeBtn" class="icon-btn" aria-label="toggle light/dark theme"></button>
+    <div style="position: relative">
+      <button id="menuBtn" class="icon-btn" aria-haspopup="true" aria-expanded="false"
+              aria-label="menu">&#9776;</button>
+      <div id="menuPanel" class="menu-panel" role="menu" hidden>
+        <a href="#" class="menu-item" role="menuitem" aria-disabled="true"
+           onclick="return false">Notes <span class="soon">soon</span></a>
+      </div>
+    </div>
+  </div>
+</header>
+<div id="mascot" aria-hidden="true" title="EyeQ"></div>
+
+<div class="layout">
+  <div class="col-left">
+    <div class="card"><h2>NODES</h2><div id="nodes"></div></div>
+    <div class="card"><h2>SESSIONS</h2><div id="sessions"></div></div>
+    <div class="card"><h2>LEADERBOARD <span class="muted" style="font-size:.7rem">
+      tasks completed, last 100</span></h2><div id="leaderboard"></div></div>
+  </div>
+  <div class="col-right">
+    <div class="card"><h2>QUEUE</h2><div id="tasks"></div></div>
+  </div>
 </div>
+
+<script src="/assets/mascot.js"></script>
 <script>
 const $ = (id) => document.getElementById(id);
 const j = async (p) => (await fetch(p)).json();
 
 function badge(s) { return `<span class="badge ${s}">${s}</span>`; }
 
+function renderLeaderboard(tasks, nodesById) {
+  const counts = {};
+  for (const t of tasks) {
+    if (!t.assigned_node) continue;
+    counts[t.assigned_node] = (counts[t.assigned_node] || 0) + 1;
+  }
+  const ranked = Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 8);
+  if (!ranked.length) return '<span class="muted">no tasks completed yet</span>';
+  const rankClasses = ['gold', 'silver', 'bronze'];
+  return '<table><tr><th></th><th>node</th><th>tasks</th></tr>' + ranked.map(([nid, count], i) => {
+    const node = nodesById[nid];
+    const name = node ? node.display_name : nid.slice(0, 8);
+    const cls = rankClasses[i] || '';
+    return `<tr><td class="medal ${cls}">${i + 1}</td><td>${name}</td><td>${count}</td></tr>`;
+  }).join('') + '</table>';
+}
+
 async function refresh() {
   try {
-    const [clique, nodes, tasks, sessions, suggestions, vcs, clusters, workspaces] =
-      await Promise.all([
-        j('/v1/clique'), j('/v1/nodes'), j('/v1/tasks'), j('/v1/sessions'),
-        j('/v1/suggestions'),
-        j('/v1/vcs/history?limit=10'), j('/v1/clusters'), j('/v1/workspaces')]);
-    const clusterKeys = (clusters || []).map(c =>
-      `${c.cluster_key}×${(c.node_ids || []).length}`).join(' · ')
-      || 'no clusters';
-    $('cliqueName').textContent =
-      `· ${clique.name} · ${clusterKeys}`;
-    $('nodes').innerHTML = '<table><tr><th>name</th><th>status</th>'
+    const [nodes, tasks, sessions] = await Promise.all([
+      j('/v1/nodes'), j('/v1/tasks'), j('/v1/sessions')]);
+    const nodesById = {};
+    for (const n of nodes) nodesById[n.node_id] = n;
+    $('nodes').innerHTML = '<table><tr><th>name</th><th>status</th><th>op</th>'
       + '<th>cluster</th><th>task</th></tr>'
       + nodes.map(n => `<tr><td>${n.display_name}</td><td>${badge(n.status)}</td>`
         + `<td>${n.model ? n.model.family + '-' + n.model.parameter_count_b + 'b' : '-'}</td>`
@@ -90,60 +183,96 @@ async function refresh() {
           + `<td>${s.pinned_node ? s.pinned_node.slice(0,8) : '-'}</td>`
           + `<td>${s.context_version}</td></tr>`).join('') + '</table>'
       : '<span class="muted">none active</span>';
-    $('suggestions').innerHTML = suggestions.length
-      ? suggestions.map(s => `<div class="sugg">${s.rationale}<br>`
-        + `<span class="muted">${s.expected_effect}</span></div>`).join('')
-      : '<span class="muted">none</span>';
-    $('vcs').innerHTML = '<table>'
-      + vcs.map(c => `<tr><td>${c.sha.slice(0,10)}</td><td>${c.message}</td>`
-        + `<td class="muted">${c.actor}</td></tr>`).join('') + '</table>';
-    $('workspaces').innerHTML = workspaces.length
-      ? '<table><tr><th>id</th><th>seq</th></tr>'
-        + workspaces.map(w => `<tr><td>${w.workspace_id}</td>`
-          + `<td>${w.seq}</td></tr>`).join('') + '</table>'
-      : '<span class="muted">none active</span>';
+    $('leaderboard').innerHTML = renderLeaderboard(tasks, nodesById);
   } catch (e) { console.error(e); }
 }
 
-let watching = null;
-let watchWs = null;
+// --- light/dark theme: explicit choice persists; otherwise follows the OS ---
+const themeBtn = $('themeBtn');
+function readStoredTheme() {
+  try { return localStorage.getItem('clique-theme'); } catch (e) { return null; }
+}
+function writeStoredTheme(t) {
+  try { localStorage.setItem('clique-theme', t); } catch (e) {}
+}
+function applyTheme(t) {
+  document.documentElement.setAttribute('data-theme', t);
+}
+applyTheme(readStoredTheme()
+  || (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'));
+themeBtn.addEventListener('click', () => {
+  const next = document.documentElement.getAttribute('data-theme') === 'light' ? 'dark' : 'light';
+  writeStoredTheme(next);
+  applyTheme(next);
+});
 
-function showLive(text) {
-  $('liveOut').textContent = text;
+// --- top-right menu (placeholder for a future notes page) ---
+const menuBtn = $('menuBtn'), menuPanel = $('menuPanel');
+function setMenu(open) {
+  menuPanel.hidden = !open;
+  menuBtn.setAttribute('aria-expanded', String(open));
+}
+menuBtn.addEventListener('click', (e) => {
+  e.stopPropagation();
+  setMenu(menuPanel.hidden);
+});
+document.addEventListener('click', (e) => {
+  if (!menuPanel.hidden && !menuPanel.contains(e.target) && e.target !== menuBtn) setMenu(false);
+});
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') setMenu(false); });
+
+// --- logo + theme icon: inlined (not <img>) so they can use currentColor
+// and pick up --fg automatically as the theme changes ---
+fetch('/assets/logo.svg').then(r => r.text()).then(t => { $('logo').innerHTML = t; })
+  .catch(console.error);
+fetch('/assets/light_dark.svg').then(r => r.text()).then(t => { themeBtn.innerHTML = t; })
+  .catch(console.error);
+
+// --- mascot: load inline SVG, map live events to emotions ---
+let mascot = null, moodTimer = 0;
+fetch('/assets/EyeQ.svg').then(r => r.text()).then(t => {
+  $('mascot').innerHTML = t;
+  mascot = Mascot.mount($('mascot'));  // resting state: no eyelid, wide open
+}).catch(console.error);
+const MOODS = { 'task.submitted': 'focused', 'task.assigned': 'focused',
+  'task.finished': 'happy', 'node.joined': 'happy', 'suggestion.new': 'stressed',
+  'node.left': 'sad', 'node.offline': 'sad', 'node.reaped': 'sad',
+  'node.kicked': 'sad', 'server.shutdown': 'sad' };
+
+// Shared entry point for every trigger (WS events, the random scheduler,
+// and clicks) -- rate-limited here so rapid-fire triggers from any of
+// them can't retarget the lid animation faster than it can settle
+// (which reads as flashing/instability, not overload from clicks alone).
+let lastFlashAt = 0;
+const FLASH_COOLDOWN_MS = 900;
+function flashEmotion(name, holdMs = 4000) {
+  if (!mascot) return;
+  const now = Date.now();
+  if (now - lastFlashAt < FLASH_COOLDOWN_MS) return;
+  lastFlashAt = now;
+  mascot.setEmotion(name);
+  clearTimeout(moodTimer);
+  moodTimer = setTimeout(() => mascot.setEmotion('none'), holdMs);
+}
+function mood(event, payload) {
+  if (!MOODS[event]) return;
+  let m = MOODS[event];
+  if (event === 'task.finished' && payload.state && payload.state !== 'succeeded'
+      ) m = 'stressed';
+  flashEmotion(m);
 }
 
-async function watchTask(taskId) {
-  stopWatch();
-  watching = taskId;
-  $('liveTask').textContent = `· watching ${taskId.slice(0, 10)}`;
-  showLive('connecting...');
-  try {
-    const cur = await j(`/v1/tasks/${taskId}`);
-    showLive(cur.partial_output
-      || (cur.result && cur.result.output) || '(no output yet)');
-  } catch (e) { showLive(`(fetch failed: ${e})`); return; }
-  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  const ws = new WebSocket(`${proto}://${location.host}/ws/tasks/${taskId}`);
-  watchWs = ws;
-  ws.onmessage = async () => {
-    try {
-      const now = await j(`/v1/tasks/${taskId}`);
-      showLive(now.partial_output
-        || (now.result && now.result.output) || $('liveOut').textContent);
-    } catch (e) { /* keep last text on transient failure */ }
-  };
-  ws.onclose = () => {
-    if (watchWs !== ws) return;
-    $('liveTask').textContent += ' (done)';
-    watchWs = null;
-  };
+// --- random idle expressions + click-to-react ---
+const RANDOM_EMOTIONS = ['neutral', 'happy', 'focused', 'sleepy', 'stressed', 'sad',
+  'expression1', 'expression2', 'expression3', 'expression4'];
+const pickEmotion = () => RANDOM_EMOTIONS[Math.floor(Math.random() * RANDOM_EMOTIONS.length)];
+const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+function scheduleRandomMood() {
+  const delay = 15000 + Math.random() * 25000; // every 15-40s
+  setTimeout(() => { flashEmotion(pickEmotion()); scheduleRandomMood(); }, delay);
 }
-
-function stopWatch(suffix = '') {
-  if (watchWs) { const ws = watchWs; watchWs = null; ws.close(); }
-  if (suffix && watching) $('liveTask').textContent += suffix;
-  watching = null;
-}
+if (!reducedMotion) scheduleRandomMood();
+$('mascot').addEventListener('click', () => flashEmotion(pickEmotion()));
 
 function connectEvents() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
@@ -151,10 +280,7 @@ function connectEvents() {
   ws.onmessage = (m) => {
     const { event, payload } = JSON.parse(m.data);
     if (event === 'stats.tick') return;
-    const div = document.createElement('div');
-    div.textContent = `${new Date().toLocaleTimeString()} ${event} ${JSON.stringify(payload)}`;
-    $('events').prepend(div);
-    while ($('events').children.length > 100) $('events').lastChild.remove();
+    mood(event, payload);
     refresh();
   };
   ws.onclose = () => setTimeout(connectEvents, 2000);

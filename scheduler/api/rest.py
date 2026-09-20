@@ -14,10 +14,12 @@ from __future__ import annotations
 import asyncio
 import time
 import uuid
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from fastapi import HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 
 from common.errors import (
     NodeUnavailableError,
@@ -384,6 +386,11 @@ def register_extended_routes(app: "FastAPI", server: "SchedulerServer") -> None:
         return FileResponse(path)
 
     # ---------------------------------------------------------------- web dash
+
+    _assets = (Path(__file__).resolve().parents[2] / "client" / "dashboard"
+               / "assets")
+    if _assets.is_dir():
+        app.mount("/assets", StaticFiles(directory=_assets), name="assets")
 
     @app.get("/dash", response_class=HTMLResponse)
     async def web_dash() -> str:
