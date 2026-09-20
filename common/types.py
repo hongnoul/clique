@@ -60,6 +60,7 @@ class TaskType(str, enum.Enum):
 class ModelSpec(BaseModel):
     family: str
     parameter_count_b: float
+    active_parameter_count_b: float | None = None  # MoE active params (routing hint)
     quantization: str = "none"
     artifact_hash: str | None = None
     context_window: int = 8192

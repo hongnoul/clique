@@ -109,6 +109,20 @@ def join(server: str = typer.Option(None, help="server URL, skips mDNS"),
              False, "--foreground", "-f",
              help="block in this terminal instead of backgrounding")) -> None:
     """Join this device to the clique as a node. Backgrounds itself by default."""
+    import typer as _typer
+
+    def _val(v):
+        # Direct calls (e.g. onboard -> join) bypass typer, so unset
+        # options arrive as OptionInfo defaults instead of None/str.
+        if v is None or isinstance(v, _typer.models.OptionInfo):
+            return None
+        return v
+
+    server, name, runtime = _val(server), _val(name), _val(runtime)
+    model_name, base_url = _val(model_name), _val(base_url)
+    param_b = _val(param_b)
+    active_param_b, parallel_slots = _val(active_param_b), _val(parallel_slots)
+    foreground = v if isinstance((v := _val(foreground)), bool) else False
     from common.config import load as load_config
     from node.agent import resolve_server
     config = load_config()
@@ -353,7 +367,7 @@ def submit(prompt: str,
         extra = f" session {sid}" if sid else ""
         console.print(f"[dim]task {task_id}{extra} submitted[/]")
         view = None
-        async for delta, done in client.stream(task_id):
+        async for delta, done in client.stream_ws(task_id):
             if delta:
                 console.print(delta, end="")
             if done is not None:
@@ -413,7 +427,7 @@ def code_submit(prompt: str = typer.Option(..., "--prompt", "-p"),
         # show the verified diff on accept.
         view = None
         saw_delta = False
-        async for delta, done in client.stream(task_id):
+        async for delta, done in client.stream_ws(task_id):
             if delta:
                 saw_delta = True
                 console.print(delta, end="")

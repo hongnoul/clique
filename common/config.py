@@ -24,6 +24,7 @@ class NodeConfig:
     data_dir: Path = DEFAULT_DIR
     model_family: str = "echo"
     model_parameter_b: float = 7.0
+    model_active_parameter_b: float | None = None  # MoE active params (routing hint)
     model_runtime: str = "echo"  # "echo" | "openai-compat"
     parallel_slots: int = 1  # concurrent tasks the runtime can batch (vLLM > 1)
     openai_base_url: str = "http://127.0.0.1:11434/v1"  # ollama default

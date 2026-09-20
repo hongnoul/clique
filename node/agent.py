@@ -239,6 +239,7 @@ def main() -> None:
     parser.add_argument("--model-name", help="openai-compat model name, e.g. qwen2.5-coder:7b")
     parser.add_argument("--base-url", help="openai-compat base URL, e.g. http://127.0.0.1:11434/v1")
     parser.add_argument("--param-b", type=float, help="model size in B params (routing)")
+    parser.add_argument("--active-param-b", type=float, help="active params in B for MoE (routing hint)")
     parser.add_argument("--parallel-slots", type=int,
                         help="concurrent tasks the runtime can batch (vLLM: 8+)")
     args = parser.parse_args()
@@ -256,6 +257,8 @@ def main() -> None:
         config.node.openai_base_url = args.base_url
     if args.param_b:
         config.node.model_parameter_b = args.param_b
+    if args.active_param_b:
+        config.node.model_active_parameter_b = args.active_param_b
     if args.parallel_slots:
         config.node.parallel_slots = args.parallel_slots
 

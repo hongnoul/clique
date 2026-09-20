@@ -380,6 +380,28 @@ def test_join_forwards_base_url_to_agent(monkeypatch):
         assert flag in argv and argv[argv.index(flag) + 1] == val
 
 
+def test_join_direct_call_drops_optioninfo_defaults(monkeypatch):
+    """Regression: onboard calls join() directly, so unset options arrive
+    as typer OptionInfo defaults. They must not leak into agent argv
+    (crashed argparse with 'OptionInfo is not subscriptable')."""
+    import node.agent as _agent
+
+    import client.cli as _cli
+
+    seen: dict = {}
+
+    def fake_agent_main():
+        import sys as _sys
+        seen["argv"] = list(_sys.argv)
+
+    monkeypatch.setattr(_agent, "main", fake_agent_main)
+    _cli.join(server="http://x:7777", runtime="echo", param_b=7.0)
+    argv = seen["argv"]
+    assert all(isinstance(x, str) for x in argv), argv
+    assert argv == ["clique-agent", "--server", "http://x:7777",
+                    "--runtime", "echo", "--param-b", "7.0"]
+
+
 def test_agent_main_applies_base_url(monkeypatch, tmp_path):
     """`clique-agent --base-url` lands in config (no network touched)."""
     import sys as _sys

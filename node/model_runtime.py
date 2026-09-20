@@ -129,6 +129,7 @@ def spec_from_config(cfg: "NodeConfig") -> ModelSpec:  # noqa: F821
     return ModelSpec(
         family=cfg.model_family,
         parameter_count_b=cfg.model_parameter_b,
+        active_parameter_count_b=cfg.model_active_parameter_b,
         runtime=cfg.model_runtime,
         context_window=cfg.context_window,
         parallel_slots=cfg.parallel_slots,
