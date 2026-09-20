@@ -326,15 +326,15 @@ def nodes(server: str = typer.Option(None)) -> None:
         node_list = await client.nodes()
         clique_info = await client.clique()
         table = Table(title="clique nodes")
-        for col in ("name", "id", "role", "op", "status", "model", "task"):
+        for col in ("name", "id", "role", "status", "model", "task"):
             table.add_column(col)
         table.add_row(
             clique_info.get("name", "server"), client.base_url.split("://", 1)[-1],
-            "server", "-", "up", "-", "-",
+            "server", "up", "-", "-",
             style="bold cyan")
         for n in node_list:
             table.add_row(
-                n.display_name, n.node_id[:8], n.role.value, n.op_level.value,
+                n.display_name, n.node_id[:8], n.role.value,
                 n.status.value,
                 n.model.cluster_key() if n.model else "-",
                 n.current_task_id or "-")
@@ -620,79 +620,11 @@ def sessions(server: str = typer.Option(None),
 
 
 @app.command()
-def op(target: str = typer.Argument(None, help="node id to op"),
-       deop: str = typer.Option(None, "--deop", help="node id to deop"),
-       policy: str = typer.Option(None, "--policy",
-                                  help="first-client-op | open | democracy"),
-       audit: bool = typer.Option(False, "--audit"),
-       server: str = typer.Option(None)) -> None:
-    """Permission control: /op, /deop, policy, audit, or list levels."""
-    client = _authed(server)
-
-    async def run() -> None:
-        if target:
-            console.print(await client.op(target))
-        elif deop:
-            console.print(await client.deop(deop))
-        elif policy:
-            console.print(await client.set_policy(policy))
-        elif audit:
-            for e in await client.audit():
-                console.print(e)
-        else:
-            table = Table(title="permissions")
-            for col in ("name", "id", "level"):
-                table.add_column(col)
-            for p in await client.permissions():
-                table.add_row(p["display_name"], p["node_id"][:8], p["level"])
-            console.print(table)
-
-    asyncio.run(run())
-
-
-@app.command()
 def kick(node_id: str, server: str = typer.Option(None)) -> None:
-    """Op: remove a node from the clique."""
+    """Remove a node from the clique."""
     client = _authed(server)
     asyncio.run(client.kick(node_id))
     console.print(f"kicked {node_id}")
-
-
-@app.command()
-def cron(expr: str = typer.Option(None, "--request",
-                                  help="cron expression, e.g. '0 * * * *'"),
-         prompt: str = typer.Option(None, "--prompt"),
-         approve: str = typer.Option(None, "--approve", help="cron id"),
-         reject: str = typer.Option(None, "--reject", help="cron id"),
-         disable: str = typer.Option(None, "--disable", help="cron id"),
-         server: str = typer.Option(None)) -> None:
-    """Cron jobs: request (any node), approve/reject (op), disable, list."""
-    client = _authed(server)
-
-    async def run() -> None:
-        if expr:
-            if not prompt:
-                raise typer.BadParameter("--request needs --prompt")
-            console.print(await client.cron_request(expr, prompt))
-        elif approve:
-            console.print(await client.cron_approve(approve))
-        elif reject:
-            console.print(await client.cron_reject(reject))
-        elif disable:
-            console.print(await client.cron_disable(disable))
-        else:
-            table = Table(title="cron jobs")
-            for col in ("id", "expr", "requested by", "status", "last run"):
-                table.add_column(col)
-            for c in await client.cron_list():
-                status = ("enabled" if c["enabled"]
-                          else "disabled" if c["approved_by"] else "pending")
-                table.add_row(c["cron_id"], c["cron_expr"],
-                              c["requested_by"][:8], status,
-                              c["last_run_at"] or "-")
-            console.print(table)
-
-    asyncio.run(run())
 
 
 @app.command()

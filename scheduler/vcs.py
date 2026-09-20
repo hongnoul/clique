@@ -4,8 +4,8 @@ Vision dump: "Local .git version control system in the shared db of
 server (consider open source framework, unless no adequate)".
 
 Uses git via dulwich (pure-python, no libgit2/CLI dependency). The
-server exports its mutable state (registry nodes, permissions, cron
-defs, sessions) as canonical JSON files into a repo working tree at
+server exports its mutable state (registry nodes, sessions,
+ledger) as canonical JSON files into a repo working tree at
 ``<data_dir>/state-repo`` and commits on change batches. sqlite remains
 the runtime source of truth; the repo is the auditable history and
 rollback vehicle.

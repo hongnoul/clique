@@ -8,12 +8,12 @@ FastAPI app exposing:
 - POST /v1/tasks/{id}/cancel
 - GET  /v1/tasks              list
 - GET  /v1/nodes, /v1/clusters, /v1/clique, /v1/stats
-- extended surface (scheduler/api/rest.py): sessions, permissions,
-  cron, suggestions, vcs, kick, /v1/chat/completions, /dash
+- extended surface (scheduler/api/rest.py): sessions, suggestions,
+  vcs, kick, /v1/chat/completions, /dash
 - WS firehose (scheduler/api/ws.py): /ws/events, /ws/sessions/{id}
 
 A background loop schedules queued tasks onto ready agent connections,
-expires leases, marks stale nodes offline, fires approved cron jobs,
+expires leases, marks stale nodes offline,
 runs suggestion analysis, and takes periodic vcs snapshots.
 """
 
@@ -45,8 +45,6 @@ from scheduler.api.rest import register_extended_routes
 from scheduler.api.workspace_routes import register_workspace_routes
 from scheduler.api.ws import EventBroadcaster, register_ws_routes
 from scheduler.context_store import ContextStore
-from scheduler.cron import CronService
-from scheduler.permissions import PermissionManager
 from scheduler.registry import Registry
 from scheduler.router import Router
 from scheduler.sessions import SessionManager
@@ -252,19 +250,14 @@ class SchedulerServer:
         # extended subsystems (P2/P3)
         db = config.server.db_path
         self.events = EventBroadcaster()
-        self.permissions = PermissionManager(
-            db, self.registry, policy=config.server.permission_policy)
         self.contexts = ContextStore(db)
         self.sessions = SessionManager(db, self.contexts, self.registry)
         self.router.sessions = self.sessions
         self.router.contexts = self.contexts
-        self.cron = CronService(db, self.router, self.permissions)
         self.suggestions = SuggestionEngine(self.registry, self.router)
         self.vcs = VcsService(config.node.data_dir / "state-repo")
         self.live_workspaces = WorkspaceService(
             config.node.data_dir / "live-workspaces")
-        self.vcs.register("permissions.json", self.permissions.export_state)
-        self.vcs.register("cron.json", self.cron.export_state)
         self.vcs.register("sessions.json", self.sessions.export_state)
         self.vcs.register("nodes.json", self._export_nodes)
         self.vcs.init()
@@ -279,9 +272,6 @@ class SchedulerServer:
         self.ledger = Ledger(db)
         self.vcs.register("ledger.json", self.ledger.export_state)
         self.race_groups: dict[str, list[str]] = {}  # race_id -> task_ids
-        self.permissions.on_change(
-            lambda action, actor, target: self.vcs.snapshot(
-                f"{action} {target or ''} by {actor[:8]}", actor))
 
         self.app = self._build_app()
 
@@ -289,7 +279,7 @@ class SchedulerServer:
         import json
         return json.dumps(
             [{"node_id": n.node_id, "display_name": n.display_name,
-              "role": n.role.value, "op_level": n.op_level.value,
+              "role": n.role.value,
               "model": n.model.cluster_key() if n.model else None}
              for n in self.registry.list_nodes()], indent=2, sort_keys=True)
 
@@ -382,10 +372,8 @@ class SchedulerServer:
                            if n != node_id}
             self.tokens[token] = node_id
             await self.events.publish("node.joined", {
-                "node_id": node_id, "display_name": body["display_name"],
-                "op_level": info.op_level.value})
+                "node_id": node_id, "display_name": body["display_name"]})
             return {"node_id": node_id, "token": token,
-                    "op_level": info.op_level.value,
                     "default_model": self.config.server.default_model}
 
         @app.websocket("/ws/agent")
@@ -456,7 +444,6 @@ class SchedulerServer:
         async def clique() -> dict:
             return {"name": self.config.server.clique_name,
                     "default_model": self.config.server.default_model,
-                    "policy": self.permissions.policy,
                     "clusters": [c.model_dump(mode="json")
                                  for c in self.registry.list_clusters()],
                     "protocol_version": protocol.PROTOCOL_VERSION,
@@ -506,7 +493,6 @@ class SchedulerServer:
             snap = {
                 "clique": {
                     "name": self.config.server.clique_name,
-                    "policy": self.config.server.permission_policy,
                     "default_model": self.config.server.default_model,
                 },
                 "nodes": [n.model_dump(mode="json")
@@ -978,10 +964,6 @@ class SchedulerServer:
                         "node.offline", {"node_id": info.node_id})
                 await self._reap_offline()
                 self.router.expire_leases()
-                for task_id in self.cron.due():
-                    log.info("cron fired task %s", task_id)
-                    await self.events.publish(
-                        "cron.fired", {"task_id": task_id})
                 for s in self.suggestions.analyze():
                     await self.events.publish("suggestion.new", s.to_dict())
                 await self.events.publish(

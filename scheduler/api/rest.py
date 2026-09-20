@@ -2,11 +2,11 @@
 
 Core routes (register, tasks, nodes, clusters, clique, stats, join
 assets) live in ``scheduler/server.py``. This module adds the extended
-surface: sessions, permissions, cron, suggestions, vcs, kick, and the
+surface: sessions, suggestions, vcs, kick, and the
 OpenAI-compatible ``/v1/chat/completions`` adapter.
 
 Auth: op-gated routes require ``Authorization: Bearer <token>`` from a
-registered node; PermissionManager.check gates by OpLevel.
+registered node.
 """
 
 from __future__ import annotations
@@ -21,7 +21,6 @@ from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 
 from common.errors import (
     NodeUnavailableError,
-    PermissionError_,
     SessionConflictError,
 )
 from common.types import TaskRequest, TaskState
@@ -43,7 +42,7 @@ def _actor(server: "SchedulerServer", request: Request) -> str:
 
 
 def register_extended_routes(app: "FastAPI", server: "SchedulerServer") -> None:
-    """Attach sessions/permissions/cron/suggestions/vcs/chat routes."""
+    """Attach sessions/suggestions/vcs/chat routes."""
 
     # ---------------------------------------------------------------- sessions
 
@@ -71,23 +70,16 @@ def register_extended_routes(app: "FastAPI", server: "SchedulerServer") -> None:
     @app.post("/v1/sessions/{session_id}/migrate")
     async def migrate_session(session_id: str, body: dict,
                               request: Request) -> dict:
-        actor = _actor(server, request)
+        _actor(server, request)
         try:
-            session = server.sessions.get(session_id)
+            server.sessions.get(session_id)
         except KeyError:
             raise HTTPException(404, "no such session")
-        if actor != session.owner_node:
-            try:
-                server.permissions.check(actor, "migrate_session")
-            except PermissionError_ as e:
-                raise HTTPException(403, str(e))
         try:
             session = server.sessions.migrate(
                 session_id, body["to_node"], body.get("reason", ""))
         except (NodeUnavailableError, SessionConflictError) as e:
             raise HTTPException(409, str(e))
-        server.permissions.record(actor, "migrate_session", session_id,
-                                  detail=body["to_node"])
         await server.events.publish("session.migrated",
                                     session.model_dump(mode="json"))
         return session.model_dump(mode="json")
@@ -101,56 +93,9 @@ def register_extended_routes(app: "FastAPI", server: "SchedulerServer") -> None:
             raise HTTPException(404, "no such session")
         return {"closed": True}
 
-    # ------------------------------------------------------------- permissions
-
-    @app.get("/v1/permissions")
-    async def permissions() -> list[dict]:
-        return server.permissions.levels()
-
-    @app.post("/v1/permissions/op")
-    async def grant_op(body: dict, request: Request) -> dict:
-        actor = _actor(server, request)
-        try:
-            server.permissions.grant_op(actor, body["target"])
-        except PermissionError_ as e:
-            raise HTTPException(403, str(e))
-        await server.events.publish("permission.granted",
-                                    {"actor": actor, "target": body["target"]})
-        return {"ok": True}
-
-    @app.post("/v1/permissions/deop")
-    async def revoke_op(body: dict, request: Request) -> dict:
-        actor = _actor(server, request)
-        try:
-            server.permissions.revoke_op(actor, body["target"])
-        except PermissionError_ as e:
-            raise HTTPException(403, str(e))
-        await server.events.publish("permission.revoked",
-                                    {"actor": actor, "target": body["target"]})
-        return {"ok": True}
-
-    @app.post("/v1/permissions/policy")
-    async def set_policy(body: dict, request: Request) -> dict:
-        actor = _actor(server, request)
-        try:
-            server.permissions.set_policy(actor, body["policy"])
-        except PermissionError_ as e:
-            raise HTTPException(403, str(e))
-        return {"policy": server.permissions.policy}
-
-    @app.get("/v1/permissions/audit")
-    async def audit(limit: int = 100) -> list[dict]:
-        return server.permissions.audit_log(limit)
-
-    # -------------------------------------------------------------------- kick
-
     @app.post("/v1/nodes/{node_id}/kick")
     async def kick(node_id: str, request: Request) -> dict:
-        actor = _actor(server, request)
-        try:
-            server.permissions.check(actor, "kick_node")
-        except PermissionError_ as e:
-            raise HTTPException(403, str(e))
+        _actor(server, request)
         info = server.registry.get(node_id)
         if info is None:
             raise HTTPException(404, "no such node")
@@ -166,7 +111,6 @@ def register_extended_routes(app: "FastAPI", server: "SchedulerServer") -> None:
         for tid in server.router.on_node_lost(node_id):
             pass  # requeued
         server.tokens = {t: n for t, n in server.tokens.items() if n != node_id}
-        server.permissions.record(actor, "kick_node", node_id)
         await server.events.publish("node.kicked", {"node_id": node_id})
         return {"kicked": node_id}
 
@@ -177,73 +121,16 @@ def register_extended_routes(app: "FastAPI", server: "SchedulerServer") -> None:
         """Stop the server -- from any node, not just its own machine.
         Refuses (409) with the list of active tasks unless confirm=true,
         so a caller (the CLI) can warn and ask before anything is killed."""
-        actor = _actor(server, request)
-        try:
-            server.permissions.check(actor, "shutdown_server")
-        except PermissionError_ as e:
-            raise HTTPException(403, str(e))
+        _actor(server, request)
         active = await server.shutdown_active_tasks()
         if active and not body.get("confirm"):
             raise HTTPException(409, {
                 "error": "nodes are actively running tasks",
                 "active": active,
             })
-        server.permissions.record(actor, "shutdown_server", None,
-                                  detail=f"{len(active)} active task(s) killed")
         await server.events.publish("server.shutdown", {"actor": actor})
         asyncio.create_task(server.shutdown_now())
         return {"shutting_down": True, "active_tasks_killed": len(active)}
-
-    # -------------------------------------------------------------------- cron
-
-    @app.post("/v1/cron")
-    async def cron_request(body: dict, request: Request) -> dict:
-        actor = _actor(server, request)
-        template = TaskRequest.model_validate(body["task_template"])
-        try:
-            job = server.cron.request(actor, body["cron_expr"], template)
-        except ValueError as e:
-            raise HTTPException(422, str(e))
-        return job.model_dump(mode="json")
-
-    @app.get("/v1/cron")
-    async def cron_list(include_pending: bool = True) -> list[dict]:
-        return [j.model_dump(mode="json")
-                for j in server.cron.list_jobs(include_pending)]
-
-    @app.post("/v1/cron/{cron_id}/approve")
-    async def cron_approve(cron_id: str, request: Request) -> dict:
-        actor = _actor(server, request)
-        try:
-            job = server.cron.approve(cron_id, actor)
-        except PermissionError_ as e:
-            raise HTTPException(403, str(e))
-        except KeyError:
-            raise HTTPException(404, "no such cron job")
-        server.permissions.record(actor, "approve_cron", cron_id)
-        return job.model_dump(mode="json")
-
-    @app.post("/v1/cron/{cron_id}/reject")
-    async def cron_reject(cron_id: str, body: dict, request: Request) -> dict:
-        actor = _actor(server, request)
-        try:
-            server.cron.reject(cron_id, actor, body.get("reason", ""))
-        except PermissionError_ as e:
-            raise HTTPException(403, str(e))
-        except KeyError:
-            raise HTTPException(404, "no such cron job")
-        return {"rejected": cron_id}
-
-    @app.post("/v1/cron/{cron_id}/disable")
-    async def cron_disable(cron_id: str, request: Request) -> dict:
-        actor = _actor(server, request)
-        try:
-            server.cron.disable(cron_id, actor)
-        except PermissionError_ as e:
-            raise HTTPException(403, str(e))
-        except KeyError:
-            raise HTTPException(404, "no such cron job")
-        return {"disabled": cron_id}
 
     # ------------------------------------------------------------- suggestions
 
@@ -281,14 +168,9 @@ def register_extended_routes(app: "FastAPI", server: "SchedulerServer") -> None:
     async def vcs_rollback(body: dict, request: Request) -> dict:
         actor = _actor(server, request)
         try:
-            server.permissions.check(actor, "manage_vcs")
-        except PermissionError_ as e:
-            raise HTTPException(403, str(e))
-        try:
             sha = server.vcs.rollback(body["sha"], actor)
         except KeyError:
             raise HTTPException(404, "unknown commit sha")
-        server.permissions.record(actor, "vcs_rollback", body["sha"])
         return {"sha": sha}
 
     @app.post("/v1/vcs/snapshot")

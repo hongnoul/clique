@@ -19,10 +19,6 @@ class SignatureError(ProtocolError):
     """Message signature failed verification."""
 
 
-class PermissionError_(CliqueError):
-    """Actor lacks the required OpLevel for the action."""
-
-
 class NoEligibleNodeError(CliqueError):
     """Router found no node satisfying task constraints."""
 

@@ -31,7 +31,6 @@ def summarize(snap: dict) -> dict[str, list[tuple]]:
                 str(n.get("display_name", "?")),
                 str(n.get("status", "?")),
                 mkey,
-                str(n.get("op_level", "")),
                 str(n.get("current_task_id") or "-"),
             ))
     tasks = snap.get("tasks")
@@ -91,7 +90,7 @@ class DashboardApp(App):
         with TabbedContent(initial="devices"):
             with TabPane("Devices", id="devices"):
                 yield self._table("devices", ["name", "status", "model",
-                                              "op", "task"])
+                                              "task"])
             with TabPane("Queue", id="queue"):
                 yield self._table("queue", ["state", "count"])
             with TabPane("Sessions", id="sessions"):

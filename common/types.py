@@ -23,13 +23,6 @@ class NodeRole(str, enum.Enum):
     CLIENT = "client"
 
 
-class OpLevel(str, enum.Enum):
-    OWNER = "owner"
-    OP = "op"
-    MEMBER = "member"
-    GUEST = "guest"
-
-
 class NodeStatus(str, enum.Enum):
     JOINING = "joining"
     READY = "ready"
@@ -92,7 +85,6 @@ class NodeInfo(BaseModel):
     node_id: str
     display_name: str
     role: NodeRole = NodeRole.CLIENT
-    op_level: OpLevel = OpLevel.MEMBER
     status: NodeStatus = NodeStatus.JOINING
     address: str = ""
     public_key: str = ""  # hex
@@ -190,18 +182,6 @@ class Session(BaseModel):
     context_version: int = 0
     created_at: datetime = Field(default_factory=utcnow)
     watchers: list[str] = Field(default_factory=list)
-
-
-class CronJob(BaseModel):
-    """Post-MVP: op-approved scheduled task (see scheduler/cron.py)."""
-
-    cron_id: str
-    requested_by: str
-    approved_by: str | None = None
-    cron_expr: str = ""
-    task_template: TaskRequest | None = None
-    enabled: bool = False
-    last_run_at: datetime | None = None
 
 
 def node_id_from_public_key(public_key_hex: str) -> str:

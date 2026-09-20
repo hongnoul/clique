@@ -318,7 +318,7 @@ def test_render_lines_populated():
                    "default_model": "qwen2.5-coder-7b"},
         "nodes": [{
             "display_name": "mac-1", "status": "ready",
-            "op_level": "op", "current_task_id": "t-abc123",
+            "current_task_id": "t-abc123",
             "model": {"family": "qwen", "parameter_count_b": 7.0},
         }],
         "clusters": [{"cluster_key": "qwen-7b-none", "node_ids": ["n1"]}],
@@ -348,7 +348,7 @@ def test_summarize_flattens_snapshot():
     from client.tui import summarize
 
     snap = {
-        "nodes": [{"display_name": "n1", "status": "ready", "op_level": "op",
+        "nodes": [{"display_name": "n1", "status": "ready",
                    "current_task_id": None,
                    "model": {"family": "q", "parameter_count_b": 7}}],
         "tasks": [{"request": {"task_id": "t-1", "prompt": "hi"},
@@ -357,7 +357,7 @@ def test_summarize_flattens_snapshot():
         "clusters": [{"cluster_key": "q-7b", "node_ids": ["a"]}],
     }
     rows = summarize(snap)
-    assert rows["nodes"] == [("n1", "ready", "q-7", "op", "-")]
+    assert rows["nodes"] == [("n1", "ready", "q-7", "-")]
     assert rows["tasks"] == [("t-1", "queued", "-", "hi")]
     assert rows["queue"] == [("queued", "1")]
     assert rows["clusters"] == [("q-7b", "1")]

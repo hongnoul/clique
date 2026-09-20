@@ -19,7 +19,6 @@ from common.types import (
     NodeInfo,
     NodeRole,
     NodeStatus,
-    OpLevel,
     ResourceSnapshot,
     utcnow,
 )
@@ -92,27 +91,14 @@ class Registry:
             self._save(existing)
             return existing
 
-        if role == NodeRole.SERVER:
-            op = OpLevel.OWNER
-        elif not self._any_client_exists():
-            op = OpLevel.OP  # first client node is op
-        else:
-            op = OpLevel.MEMBER
-
         info = NodeInfo(
-            node_id=node_id, display_name=display_name, role=role, op_level=op,
+            node_id=node_id, display_name=display_name, role=role,
             status=NodeStatus.READY if model else NodeStatus.JOINING,
             address=address, public_key=public_key, model=model,
             resources=resources, last_heartbeat_at=utcnow(),
         )
         self._save(info, self._next_join_order())
         return info
-
-    def _any_client_exists(self) -> bool:
-        for n in self.list_nodes():
-            if n.role == NodeRole.CLIENT:
-                return True
-        return False
 
     def on_heartbeat(self, node_id: str, *, status: NodeStatus,
                      resources: ResourceSnapshot | None,
@@ -224,14 +210,7 @@ class Registry:
     def delete(self, node_id: str) -> None:
         """Permanently drop a node's roster entry (past its reap grace
         period). The keypair identity survives, but a later rejoin starts
-        a fresh row: new join_order, op_level reset to default."""
+        a fresh row with a new join_order."""
         self._db.execute("DELETE FROM nodes WHERE node_id=?", (node_id,))
         self._db.commit()
 
-    def set_op_level(self, node_id: str, level: OpLevel) -> NodeInfo | None:
-        info = self.get(node_id)
-        if info is None:
-            return None
-        info.op_level = level
-        self._save(info)
-        return info

@@ -54,7 +54,6 @@ class ServerConfig:
     queue_cap: int = 1000
     lease_seconds: float = 120.0
     max_attempts: int = 3
-    permission_policy: str = "first-client-op"
     clique_name: str = "clique"
 
 

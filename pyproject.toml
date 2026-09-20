@@ -14,7 +14,6 @@ dependencies = [
     "huggingface_hub",
     "dulwich",
     "apscheduler",
-    "croniter",
     "typer",
     "rich",
     "textual",

@@ -64,7 +64,7 @@ class NodeAgent:
             data = r.json()
         self.node_id = data["node_id"]
         self.token = data["token"]
-        log.info("registered as %s (%s, op=%s)", name, self.node_id, data["op_level"])
+        log.info("registered as %s (%s)", name, self.node_id)
 
     async def run(self) -> None:
         if not await self.runtime.health():

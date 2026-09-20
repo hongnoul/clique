@@ -391,22 +391,7 @@ class CliqueClient:
     async def close_session(self, session_id: str) -> dict:
         return await self._delete(f"/v1/sessions/{session_id}")
 
-    # -- permissions -----------------------------------------------------------
-
-    async def permissions(self) -> list[dict]:
-        return await self._get("/v1/permissions")  # type: ignore[return-value]
-
-    async def op(self, target: str) -> dict:
-        return await self._post("/v1/permissions/op", {"target": target})
-
-    async def deop(self, target: str) -> dict:
-        return await self._post("/v1/permissions/deop", {"target": target})
-
-    async def set_policy(self, policy: str) -> dict:
-        return await self._post("/v1/permissions/policy", {"policy": policy})
-
-    async def audit(self, limit: int = 100) -> list[dict]:
-        return await self._get("/v1/permissions/audit", limit=limit)  # type: ignore
+    # -- admin -----------------------------------------------------------------
 
     async def kick(self, node_id: str) -> dict:
         return await self._post(f"/v1/nodes/{node_id}/kick")
@@ -415,26 +400,6 @@ class CliqueClient:
         """Raises httpx.HTTPStatusError(409) with response.json()["detail"]
         = {"active": [...]} if nodes have active tasks and confirm=False."""
         return await self._post("/v1/server/shutdown", {"confirm": confirm})
-
-    # -- cron ------------------------------------------------------------------
-
-    async def cron_request(self, cron_expr: str, prompt: str, **kw) -> dict:
-        template = TaskRequest(prompt=prompt, idempotency_key="template", **kw)
-        return await self._post("/v1/cron", {
-            "cron_expr": cron_expr,
-            "task_template": template.model_dump(mode="json")})
-
-    async def cron_list(self) -> list[dict]:
-        return await self._get("/v1/cron")  # type: ignore[return-value]
-
-    async def cron_approve(self, cron_id: str) -> dict:
-        return await self._post(f"/v1/cron/{cron_id}/approve")
-
-    async def cron_reject(self, cron_id: str, reason: str = "") -> dict:
-        return await self._post(f"/v1/cron/{cron_id}/reject", {"reason": reason})
-
-    async def cron_disable(self, cron_id: str) -> dict:
-        return await self._post(f"/v1/cron/{cron_id}/disable")
 
     # -- suggestions & vcs -----------------------------------------------------
 

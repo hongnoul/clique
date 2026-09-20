@@ -1,5 +1,5 @@
 """Tests for the extended (P2/P3) surface: sessions + shared context,
-permissions (/op), cron, vcs snapshots, suggestions, kick, /ws/events,
+vcs snapshots, suggestions, kick, /ws/events,
 and the OpenAI-compatible /v1/chat/completions adapter.
 
 Reuses the live-server ``clique`` fixture style from test_integration:
@@ -222,51 +222,17 @@ async def test_session_migration(clique):
         assert r.json()["pinned_node"] == small.node_id
 
 
-# ---------------------------------------------------------------- permissions
 
 
 @pytest.mark.asyncio
-async def test_op_grant_revoke_and_gating(clique):
+async def test_kick_requires_auth_and_removes_node(clique):
     base, server, agents = clique
-    op_hdr = hdr(server, agents, "small-node")      # first client = op
-    member_hdr = hdr(server, agents, "big-node")    # later = member
-    big = agent_by_name(server, agents, "big-node")
-    async with httpx.AsyncClient() as c:
-        # member may not op anyone
-        r = await c.post(base + "/v1/permissions/op",
-                         json={"target": big.node_id}, headers=member_hdr)
-        assert r.status_code == 403
-        # op grants op to member
-        r = await c.post(base + "/v1/permissions/op",
-                         json={"target": big.node_id}, headers=op_hdr)
-        assert r.status_code == 200
-        levels = {p["display_name"]: p["level"]
-                  for p in (await c.get(base + "/v1/permissions")).json()}
-        assert levels["big-node"] == "op"
-        # deop again
-        r = await c.post(base + "/v1/permissions/deop",
-                         json={"target": big.node_id}, headers=op_hdr)
-        assert r.status_code == 200
-        # audit log recorded both
-        audit = (await c.get(base + "/v1/permissions/audit")).json()
-        actions = [e["action"] for e in audit]
-        assert "grant_op" in actions and "revoke_op" in actions
-        # unauthenticated requests are rejected
-        r = await c.post(base + "/v1/permissions/op",
-                         json={"target": big.node_id})
-        assert r.status_code == 401
-
-
-@pytest.mark.asyncio
-async def test_kick_requires_op_and_removes_node(clique):
-    base, server, agents = clique
-    member_hdr = hdr(server, agents, "big-node")
     op_hdr = hdr(server, agents, "small-node")
     big = agent_by_name(server, agents, "big-node")
     async with httpx.AsyncClient() as c:
-        r = await c.post(f"{base}/v1/nodes/{big.node_id}/kick",
-                         headers=member_hdr)
-        assert r.status_code == 403
+        # unauthenticated kick is rejected
+        r = await c.post(f"{base}/v1/nodes/{big.node_id}/kick")
+        assert r.status_code == 401
         r = await c.post(f"{base}/v1/nodes/{big.node_id}/kick", headers=op_hdr)
         assert r.status_code == 200
         info = server.registry.get(big.node_id)
@@ -275,46 +241,6 @@ async def test_kick_requires_op_and_removes_node(clique):
         assert info is None or info.status.value == "offline"
 
 
-# ----------------------------------------------------------------------- cron
-
-
-@pytest.mark.asyncio
-async def test_cron_request_approve_fire(clique):
-    base, server, agents = clique
-    op_hdr = hdr(server, agents, "small-node")
-    member_hdr = hdr(server, agents, "big-node")
-    async with httpx.AsyncClient() as c:
-        template = TaskRequest(prompt="scheduled hello",
-                               idempotency_key="template").model_dump(mode="json")
-        # invalid expression rejected
-        r = await c.post(base + "/v1/cron", headers=member_hdr,
-                         json={"cron_expr": "not a cron", "task_template": template})
-        assert r.status_code == 422
-        # member may request
-        r = await c.post(base + "/v1/cron", headers=member_hdr,
-                         json={"cron_expr": "* * * * *", "task_template": template})
-        job = r.json()
-        assert job["approved_by"] is None and not job["enabled"]
-        # member may not approve
-        r = await c.post(f"{base}/v1/cron/{job['cron_id']}/approve",
-                         headers=member_hdr)
-        assert r.status_code == 403
-        # op approves -> enabled
-        r = await c.post(f"{base}/v1/cron/{job['cron_id']}/approve",
-                         headers=op_hdr)
-        assert r.json()["enabled"] is True
-    # manual fire submits a task; refire for the same slot is idempotent
-    tid = server.cron.fire(job["cron_id"])
-    data = await wait_done(base, tid)
-    assert data["state"] == "succeeded"
-    assert "scheduled hello" in data["result"]["output"]
-    # requester can disable
-    async with httpx.AsyncClient() as c:
-        r = await c.post(f"{base}/v1/cron/{job['cron_id']}/disable",
-                         headers=member_hdr)
-        assert r.status_code == 200
-        jobs = (await c.get(base + "/v1/cron")).json()
-        assert jobs[0]["enabled"] is False
 
 
 # ------------------------------------------------------------------------ vcs
@@ -323,28 +249,26 @@ async def test_cron_request_approve_fire(clique):
 @pytest.mark.asyncio
 async def test_vcs_snapshot_history_diff_rollback(clique):
     base, server, agents = clique
-    op_hdr = hdr(server, agents, "small-node")
-    member_hdr = hdr(server, agents, "big-node")
-    big = agent_by_name(server, agents, "big-node")
+    any_hdr = hdr(server, agents, "small-node")
     async with httpx.AsyncClient() as c:
-        # baseline exists from init; op changes trigger snapshots
-        await c.post(base + "/v1/permissions/op",
-                     json={"target": big.node_id}, headers=op_hdr)
-        await c.post(base + "/v1/permissions/deop",
-                     json={"target": big.node_id}, headers=op_hdr)
+        # baseline exists from init; take an explicit snapshot
+        r = await c.post(base + "/v1/vcs/snapshot",
+                         json={"message": "test snapshot"}, headers=any_hdr)
+        assert r.status_code == 200
         history = (await c.get(base + "/v1/vcs/history")).json()
-        assert len(history) >= 3
-        grant_sha, base_sha = history[1]["sha"], history[-1]["sha"]
-        diff = (await c.get(base + "/v1/vcs/diff",
-                            params={"a": base_sha, "b": grant_sha})).json()["diff"]
-        assert '"level": "op"' in diff  # big-node became op in permissions.json
-        # member cannot rollback
+        assert len(history) >= 1
+        base_sha = history[-1]["sha"]
+        if len(history) >= 2:
+            diff = (await c.get(base + "/v1/vcs/diff",
+                                params={"a": base_sha,
+                                        "b": history[0]["sha"]})).json()
+            assert "diff" in diff
+        # unauthenticated rollback is rejected
+        r = await c.post(base + "/v1/vcs/rollback", json={"sha": base_sha})
+        assert r.status_code == 401
+        # authenticated rollback adds a new commit (history never rewritten)
         r = await c.post(base + "/v1/vcs/rollback", json={"sha": base_sha},
-                         headers=member_hdr)
-        assert r.status_code == 403
-        # op rollback adds a new commit (history never rewritten)
-        r = await c.post(base + "/v1/vcs/rollback", json={"sha": base_sha},
-                         headers=op_hdr)
+                         headers=any_hdr)
         assert r.status_code == 200
         history2 = (await c.get(base + "/v1/vcs/history")).json()
         assert len(history2) > len(history)  # history never rewritten

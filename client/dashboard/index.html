@@ -40,8 +40,6 @@
   <div class="card"><h2>Sessions</h2><div id="sessions"></div></div>
   <div class="card"><h2>Suggestions</h2><div id="suggestions"></div></div>
   <div class="card"><h2>Live workspaces</h2><div id="workspaces"></div></div>
-  <div class="card"><h2>Governance</h2><div id="permissions"></div>
-    <h2>Cron</h2><div id="cron"></div></div>
   <div class="card"><h2>Snapshots</h2><div id="vcs"></div></div>
   <div class="card" style="grid-column: 1 / -1"><h2>Live events</h2>
     <div id="events"></div></div>
@@ -54,20 +52,19 @@ function badge(s) { return `<span class="badge ${s}">${s}</span>`; }
 
 async function refresh() {
   try {
-    const [clique, nodes, tasks, sessions, suggestions, perms, cron, vcs, clusters, workspaces] =
+    const [clique, nodes, tasks, sessions, suggestions, vcs, clusters, workspaces] =
       await Promise.all([
         j('/v1/clique'), j('/v1/nodes'), j('/v1/tasks'), j('/v1/sessions'),
-        j('/v1/suggestions'), j('/v1/permissions'), j('/v1/cron'),
+        j('/v1/suggestions'),
         j('/v1/vcs/history?limit=10'), j('/v1/clusters'), j('/v1/workspaces')]);
     const clusterKeys = (clusters || []).map(c =>
       `${c.cluster_key}×${(c.node_ids || []).length}`).join(' · ')
       || 'no clusters';
     $('cliqueName').textContent =
-      `· ${clique.name} · policy ${clique.policy} · ${clusterKeys}`;
-    $('nodes').innerHTML = '<table><tr><th>name</th><th>status</th><th>op</th>'
+      `· ${clique.name} · ${clusterKeys}`;
+    $('nodes').innerHTML = '<table><tr><th>name</th><th>status</th>'
       + '<th>cluster</th><th>task</th></tr>'
       + nodes.map(n => `<tr><td>${n.display_name}</td><td>${badge(n.status)}</td>`
-        + `<td class="${n.op_level}">${n.op_level}</td>`
         + `<td>${n.model ? n.model.family + '-' + n.model.parameter_count_b + 'b' : '-'}</td>`
         + `<td>${n.current_task_id ? n.current_task_id.slice(0,10) : '-'}</td></tr>`)
         .join('') + '</table>';
@@ -97,14 +94,6 @@ async function refresh() {
       ? suggestions.map(s => `<div class="sugg">${s.rationale}<br>`
         + `<span class="muted">${s.expected_effect}</span></div>`).join('')
       : '<span class="muted">none</span>';
-    $('permissions').innerHTML = '<table>'
-      + perms.map(p => `<tr><td>${p.display_name}</td>`
-        + `<td class="${p.level}">${p.level}</td></tr>`).join('') + '</table>';
-    $('cron').innerHTML = cron.length
-      ? '<table>' + cron.map(c => `<tr><td>${c.cron_id}</td><td>${c.cron_expr}</td>`
-        + `<td>${c.enabled ? 'enabled' : (c.approved_by ? 'disabled' : 'pending')}</td></tr>`)
-        .join('') + '</table>'
-      : '<span class="muted">no jobs</span>';
     $('vcs').innerHTML = '<table>'
       + vcs.map(c => `<tr><td>${c.sha.slice(0,10)}</td><td>${c.message}</td>`
         + `<td class="muted">${c.actor}</td></tr>`).join('') + '</table>';

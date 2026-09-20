@@ -97,8 +97,7 @@ def render_lines(snap: dict, width: int = 100,
             mkey = f"{model.get('family', '-')}-{model.get('parameter_count_b', '-')}"
             mkey = mkey[:22].ljust(22)
             task = (n.get("current_task_id") or "-")[:8]
-            op = str(n.get("op_level", ""))[:6]
-            L.append(f"  {name} {status} {mkey} {task} [{op}]")
+            L.append(f"  {name} {status} {mkey} {task}")
         if len(nodes) > 30:
             L.append(f"  ... +{len(nodes) - 30} more")
     elif isinstance(nodes, dict) and nodes.get("_error"):

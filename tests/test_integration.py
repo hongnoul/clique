@@ -115,13 +115,12 @@ async def wait_done(base: str, task_id: str, timeout: float = 15.0) -> dict:
 
 
 @pytest.mark.asyncio
-async def test_join_and_first_client_is_op(clique):
+async def test_join_all_nodes_ready(clique):
     base, _, _ = clique
     async with httpx.AsyncClient() as c:
         nodes = (await c.get(base + "/v1/nodes")).json()
     by_name = {n["display_name"]: n for n in nodes}
-    assert by_name["small-node"]["op_level"] == "op"      # first client = op
-    assert by_name["big-node"]["op_level"] == "member"    # later = member
+    assert set(by_name) >= {"small-node", "big-node"}
     assert all(n["status"] == "ready" for n in nodes)
 
 
