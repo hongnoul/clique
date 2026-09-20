@@ -88,6 +88,23 @@ def _as_openai_tools(tools: Sequence[ToolDef | dict] | None) -> list[dict] | Non
     return out or None
 
 
+def _fallback_call(obj: dict) -> ToolCall | None:
+    """One ToolCall from a describe-instead-of-call JSON object, or None."""
+    if not isinstance(obj, dict):
+        return None
+    name = obj.get("action") or obj.get("name") or obj.get("tool") \
+        or obj.get("function") or ""
+    args = obj.get("arguments", {})
+    if isinstance(args, str):
+        try:
+            args = json.loads(args)
+        except json.JSONDecodeError:
+            args = {}
+    if name and isinstance(args, dict):
+        return ToolCall(call_id="", name=name, arguments=args)
+    return None
+
+
 def parse_tool_calls_response(data: dict) -> tuple[str, list[ToolCall]]:
     """Split one non-streaming choice into (content, tool_calls).
 
@@ -117,12 +134,10 @@ def parse_tool_calls_response(data: dict) -> tuple[str, list[ToolCall]]:
             obj = json.loads(content.strip())
         except json.JSONDecodeError:
             obj = None
-        if isinstance(obj, dict):
-            name = obj.get("action") or obj.get("name") or ""
-            args = obj.get("arguments", {})
-            if name and isinstance(args, dict):
-                calls = [ToolCall(call_id="", name=name, arguments=args)]
-                content = ""
+        fb = _fallback_call(obj or {})
+        if fb is not None:
+            calls = [fb]
+            content = ""
     if not calls and "</think>" in content:
         # reasoning models wrap the answer after </think>: the fallback
         # JSON may follow the think block instead of starting the text.
@@ -134,12 +149,10 @@ def parse_tool_calls_response(data: dict) -> tuple[str, list[ToolCall]]:
                 obj = json.loads(tail)
             except json.JSONDecodeError:
                 obj = None
-            if isinstance(obj, dict):
-                name = obj.get("action") or obj.get("name") or ""
-                args = obj.get("arguments", {})
-                if name and isinstance(args, dict):
-                    calls = [ToolCall(call_id="", name=name, arguments=args)]
-                    content = ""
+            fb = _fallback_call(obj or {})
+            if fb is not None:
+                calls = [fb]
+                content = ""
     return content, calls
 
 

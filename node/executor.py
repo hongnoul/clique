@@ -244,7 +244,8 @@ async def _execute_agentic(ws, runtime: BaseRuntime,
         + "\nYou have tools: " + ", ".join(names) + ". "
         "To use one, reply with ONLY a JSON object "
         '{"action": "<name>", "arguments": {...}} and nothing else. '
-        "Results come back as a tool message; then continue.")
+        "Results come back as a tool message; then continue. "
+        "If you cannot call a tool, reply with your answer as text.")
     final_content = ""
     for rnd in range(AGENTIC_MAX_ROUNDS):
         content, calls = await runtime.infer_tools(

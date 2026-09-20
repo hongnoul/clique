@@ -255,3 +255,12 @@ async def test_fallback_after_think_block():
             "content": "We need to respond with only a JSON object.\n</think>\n"
                        '{"action": "clique_self_assess", "arguments": {}}'}}]})
     assert content == "" and calls[0].name == "clique_self_assess"
+
+
+@pytest.mark.asyncio
+async def test_fallback_accepts_tool_key_and_string_args():
+    from node.model_runtime import parse_tool_calls_response
+    content, calls = parse_tool_calls_response({
+        "choices": [{"message": {
+            "content": '{\n  "tool": "clique_self_assess",\n  "arguments": {}\n}'}}]})
+    assert content == "" and calls[0].name == "clique_self_assess"
