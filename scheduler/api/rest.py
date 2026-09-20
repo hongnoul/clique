@@ -266,14 +266,22 @@ def register_extended_routes(app: "FastAPI", server: "SchedulerServer") -> None:
 
     # --------------------------------------------------------------------- vcs
 
+    def _vcs_for(repo: str):
+        """state = server audit repo, code = accepted code-task repo."""
+        if repo == "code":
+            return server.code_vcs
+        if repo == "state":
+            return server.vcs
+        raise HTTPException(422, "repo must be 'state' or 'code'")
+
     @app.get("/v1/vcs/history")
-    async def vcs_history(limit: int = 50) -> list[dict]:
-        return server.vcs.history(limit=limit)
+    async def vcs_history(limit: int = 50, repo: str = "state") -> list[dict]:
+        return _vcs_for(repo).history(limit=limit)
 
     @app.get("/v1/vcs/diff")
-    async def vcs_diff(a: str, b: str) -> dict:
+    async def vcs_diff(a: str, b: str, repo: str = "state") -> dict:
         try:
-            return {"diff": server.vcs.diff(a, b)}
+            return {"diff": _vcs_for(repo).diff(a, b)}
         except KeyError:
             raise HTTPException(404, "unknown commit sha")
 
