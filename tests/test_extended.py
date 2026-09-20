@@ -481,3 +481,28 @@ async def test_web_dashboard_served(clique):
         r = await c.get(base + "/dash")
     assert r.status_code == 200
     assert "clique dashboard" in r.text
+
+
+# -------------------------------------------------------------------- sdk auth
+
+
+@pytest.mark.asyncio
+async def test_sdk_silent_reauth_on_stale_token(clique, tmp_path):
+    """SDK retries once with fresh registration when the server has
+    forgotten its token (in-memory tokens die on server restart)."""
+    from client.sdk import CliqueClient
+
+    base, server, _ = clique
+    client = CliqueClient(base)
+    await client.authenticate(tmp_path / "sdk-test")
+    assert client.token is not None
+    # sanity: authed call works (sessions route is token-gated)
+    first = await client.create_session()
+    assert first["session_id"].startswith("s-")
+
+    # simulate server restart: wipe in-memory tokens
+    server.tokens.clear()
+    # caller never sees the 401: SDK re-registers and retries silently
+    second = await client.create_session()
+    assert second["session_id"].startswith("s-")
+    assert client.token is not None
