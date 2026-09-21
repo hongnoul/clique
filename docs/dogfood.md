@@ -132,7 +132,7 @@ all hitting the same sequenced state:
   `--watch` streams live deltas (snapshot first); `--write` is a one-shot
   sequenced replace via `POST /v1/workspaces/{id}/patch`.
 - **MCP:** `clique-mcp` exposes `clique_workspace_create/list/read/write/
-  patch/history/flush/task`, so any MCP harness (jcode, claude, codex)
+  patch/history/flush/export/task`, so any MCP harness (jcode, claude, codex)
   reads and writes the same live files as every other agent. `join.sh`
   auto-registers the MCP server into local harnesses.
 - **Agents:** tasks submitted with `--workspace` stamp head `seq`, embed
