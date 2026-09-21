@@ -22,8 +22,8 @@ CREATE TABLE IF NOT EXISTS ledger (
     task_type TEXT NOT NULL,
     state TEXT NOT NULL,
     node_id TEXT,
-    accepted INTEGER NOT NULL,   -- 1 when payout-eligible
-    rate REAL NOT NULL,          -- rate credited (0 when not accepted)
+    accepted INTEGER NOT NULL,   -- 1 when the task passed verification
+    rate REAL NOT NULL,          -- reserved; always 0 (no monetary rate)
     applied_sha TEXT,
     created_at TEXT NOT NULL
 );

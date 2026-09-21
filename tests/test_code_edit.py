@@ -176,7 +176,7 @@ async def test_code_patch_rejected_no_fence(code_clique, tmp_path):
 
 @pytest.mark.asyncio
 async def test_ledger_records_accepted(code_clique, tmp_path):
-    """Accepted code task credits $0.20 in ledger + /v1/stats."""
+    """Accepted code task is recorded as accepted in ledger + /v1/stats."""
     base, server = code_clique
     agent, task = await run_agent(base, tmp_path, GOOD_DIFF_OUTPUT)
     try:

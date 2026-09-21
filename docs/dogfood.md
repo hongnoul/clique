@@ -24,13 +24,13 @@ GPU engine: vLLM FP8 `nemotron-3-nano-fp8` on :8000, 340+ TPS aggregate at 32-wa
   1.4-1.5s on `7c1e3619` through the tunnel, `clique leave` deregisters.
 - Fail-fast: documented one-liners use `--connect-timeout 5`, so hitting
   a tailnet IP from off-tailnet errors in 5s instead of hanging.
-- Money loop healthy: `gx10-vllm` ready (nemotron-3-nano-fp8, 16 slots),
+- Core loop healthy: `gx10-vllm` ready (nemotron-3-nano-fp8, 16 slots),
   ledger 75+ succeeded.
 
 ## Graceful principles
 
 1. **Never break the golden path.** gx10's systemd stack (vllm + clique-server +
-   clique-node) is the money loop. Teammate nodes are additive capacity only.
+   clique-node) is the core loop. Teammate nodes are additive capacity only.
 2. **Warn, never block, on version drift.** `/v1/clique` now exposes
    `protocol_version` + `server_sha`; `clique onboard` warns on mismatch and joins
    anyway. Hard failure is reserved for unreachable server.

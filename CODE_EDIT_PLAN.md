@@ -8,7 +8,7 @@ verified direct-edit loop without trusting node output.
 Server owns canonical git. Nodes stay stateless raw inference
 (`node/agent.py::_execute` + `runtime.infer_stream` unchanged in Phase 1).
 A deterministic Python harness on the server extracts, applies, and
-test-verifies every patch before commit and before ledger payout.
+test-verifies every patch before commit and before the ledger records it as accepted.
 
 No model shell on laptops. No arbitrary consumer code on volunteer nodes.
 
@@ -21,7 +21,7 @@ Collaboration is scheduler-level, not P2P:
    out to N nodes in different clusters. First harness-accepted patch wins
    via existing `router.on_result` first-commit-wins. Losers get `revoke`.
    This converts replica count into latency reduction and higher accept
-   rate, which is the money metric ($0.20 per accepted task).
+   rate, which is the ledger's core metric (accepted tasks per node).
 2. **Proposer plus deterministic verifier (Phase 1).** Any node proposes a
    unified diff. Server verifies with `patch --dry-run` + `test_cmd` in an
    ephemeral checkout. No LLM verifier needed. Verifier is code, not a node.
@@ -106,7 +106,7 @@ flowchart LR
     S --> R[router.schedule_pending<br/>one task per node]
     R --> N[node: infer_stream<br/>raw text only]
     N --> H[harness: extract + dry-run<br/>+ apply + pytest]
-    H -->|pass| V[code-repo commit<br/>SUCCEEDED + ledger $0.20]
+    H -->|pass| V[code-repo commit<br/>SUCCEEDED + ledger accepted]
     H -->|fail| F[FAILED diff_invalid/tests_failed<br/>retry to max_attempts]
     V --> W[cleanup workspace<br/>keep sha]
 ```
@@ -115,7 +115,7 @@ Parallel-race variant: router assigns same `task_id` family (shared
 `idempotency_key` prefix) to K nodes; first `H pass` commits, rest revoked
 via existing `msg_revoke`.
 
-## 6. Verification equals payout
+## 6. Verification equals acceptance
 
 Accepted means all three, checked on server, never on node claim:
 
@@ -157,7 +157,7 @@ path_forbidden | patch_conflict | tests_failed | timeout`. Retry per
   + SDK/CLI. Integration: `test_code_patch_accepted`,
   `test_code_patch_rejected`, `test_parallel_race_first_wins`.
 - **P1.5 (0.5d):** session follow-ups + dash diff preview + ledger wiring.
-- **P2 (after money loop stable):** node-local loop. Move `_execute` into
+- **P2 (after the verified loop is stable):** node-local loop. Move `_execute` into
   `node/executor.py`, add `node/tools.py` (`read | edit | bash` JSON fence,
   max 5 steps, `<done>` terminator). Server still reverifies. This is the
   only phase that touches node trust boundary.

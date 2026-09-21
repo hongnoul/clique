@@ -1,6 +1,6 @@
 # clique — Idle Compute
 
-**Plug in your idle laptop and get paid for every useful task it completes.**
+**Plug in your idle laptop and every useful task it completes is verified and credited to it in a durable ledger.**
 
 Status: target for HackMIT 2026. This is a goal to prove, not a result already measured.
 
@@ -14,7 +14,7 @@ Demand is batch code work that is easy to verify with tests. Supply is existing 
 
 ## Why this is worth building
 
-In 2026 there is no gap between a hackathon demo and a business if the demo serves real jobs with real accounting. If the ledger records useful work and pays a fixed rate from day one, the weekend prototype is also a paid pilot.
+In 2026 there is no gap between a hackathon demo and a real system if the demo serves real jobs with real accounting. The ledger records every accepted task per node from day one, so the weekend prototype is also a working collaborative pool with honest goodput numbers.
 
 The bet is that idle consumer hardware becomes the cheapest compliant layer for delay tolerant work. Datacenters win on single stream speed. A laptop pool wins on zero new hardware, concurrent batch throughput, and owner aligned supply.
 

@@ -484,7 +484,7 @@ def register_extended_routes(app: "FastAPI", server: "SchedulerServer") -> None:
 
     @app.get("/v1/ledger")
     async def ledger() -> dict:
-        """Accepted-work accounting: totals, per-node earnings, states."""
+        """Accepted-work accounting: totals, per-node accepted counts, states."""
         return server.ledger.summary()
 
     # ------------------------------------------------------------ model mirror
