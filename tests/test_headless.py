@@ -641,7 +641,7 @@ async def test_repo_bundle_roundtrips_through_git(headless_server, tmp_path):
             return r.read()
 
     blob = await asyncio.to_thread(_do)
-    bundle = tmp_path / "tcj.bundle"
+    bundle = tmp_path / "clique.bundle"
     bundle.write_bytes(blob)
     proc = await asyncio.to_thread(
         subprocess.run,

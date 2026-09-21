@@ -306,11 +306,15 @@ class OpenAICompatRuntime(BaseRuntime):
         if tools:
             body["tools"] = tools
             # NOTE: fleet vLLM runs without --enable-auto-tool-choice /
-            # --tool-call-parser, so "auto" 400s. Only forward explicit
-            # non-auto choices; the transcript nudge + text fallback
-            # parser carry the loop on this fleet.
+            # --tool-call-parser, so "auto" 400s -- and vLLM *defaults* to
+            # "auto" whenever tools are present, so omitting the field 400s
+            # too. Send an explicit non-auto choice, else "none": the chat
+            # template still shows tool defs to the model, and the
+            # transcript nudge + text fallback parser carry the loop.
             if tool_choice and tool_choice != "auto":
                 body["tool_choice"] = tool_choice
+            else:
+                body["tool_choice"] = "none"
         try:
             async with httpx.AsyncClient(timeout=self.timeout_s) as c:
                 r = await c.post(f"{self.base_url}/chat/completions",

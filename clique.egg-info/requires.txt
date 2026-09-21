@@ -8,11 +8,13 @@ psutil
 huggingface_hub
 dulwich
 apscheduler
-croniter
 typer
 rich
 textual
 pynacl
+certifi
+pytest
+mcp>=2
 
 [dev]
 pytest

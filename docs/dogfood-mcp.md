@@ -79,7 +79,7 @@ no pane ever commits or pushes by itself.
    `GET /v1/workspaces/<id>/export?paths=a.md,b.md` (REST). The bundle
    carries files + git provenance (checkpoint shas).
 3. **Apply on a credentialed box.** `sh scripts/docs-sync.sh
-   /tmp/bundle.json --checkout ~/git/tcj` dry-runs; `--apply` writes.
+   /tmp/bundle.json --checkout ~/git/clique` dry-runs; `--apply` writes.
    Path guard rejects `..` and absolute paths.
 4. **Human review gate.** Commit + push + PR stay manual. The agent
    reports the workspace id, export seq, and what changed; a human

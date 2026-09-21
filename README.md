@@ -1,10 +1,10 @@
-# tcj — Idle Compute
+# clique — Idle Compute
 
 **Plug in your idle laptop and get paid for every useful task it completes.**
 
 Status: target for HackMIT 2026. This is a goal to prove, not a result already measured.
 
-Details: [Spec](SPEC.md).
+Details: [Code edit plan](CODE_EDIT_PLAN.md).
 
 ## The product in one paragraph
 
@@ -63,12 +63,14 @@ Keep the durable ledger, fair queue, and recovery. Add pipeline replicas for the
 ## Repo layout
 
 ```text
-tcj/
+clique/
   README.md          # this file: product, quickstart
-  SPEC.md            # implementation spec
-  client/            # consumer API client, CLI, curl TUI
-  scheduler/         # API, admission, scheduler, ledger
-  node/              # capacity agent, inference backend
+  CODE_EDIT_PLAN.md  # verified code-edit loop plan
+  client/            # SDK, CLI, TUI, MCP server, dashboard
+  common/            # protocol, types, config, TLS
+  scheduler/         # API, router, registry, ledger, workspaces
+  node/              # agent, discovery, runtime, executor
+  docs/              # dogfood, MCP, live workspaces
 ```
 
 ## Getting started
@@ -77,8 +79,8 @@ Dogfooding the live server? Start with [docs/dogfood.md](docs/dogfood.md):
 run `clique`, press Join, echo before GPU, one wave at a time.
 
 ```bash
-git clone https://github.com/hongnoul/tcj
-cd tcj
+git clone https://github.com/hongnoul/clique
+cd clique
 uv venv && uv pip install -e .          # or: pip install -e .
 clique                                  # button home: Host Join Chat Dashboard
 ```
@@ -175,8 +177,9 @@ textual dashboard.
 Implemented: mDNS discovery, signed registration (first client node is op),
 heartbeats, durable sqlite queue, busyness- and size-aware routing (longer
 prompts to bigger models, one task per node), streaming results, retry on
-node loss, cancellation, idempotent submits, CLI. See SPEC.md for what is
-next (sessions, permissions UI, cron, vcs, dashboard).
+node loss, cancellation, idempotent submits, CLI, sessions, live
+workspaces, MCP server, dashboard. See CODE_EDIT_PLAN.md for the
+verified code-edit loop and docs/ for the dogfood guides.
 
 ### Joining on enterprise Wi-Fi (eduroam, MIT SECURE, etc.)
 

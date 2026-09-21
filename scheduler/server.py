@@ -591,8 +591,8 @@ class SchedulerServer:
                 f"{base}\n"
                 f"browser:   {base}/dash (live) · {base}/chat (ask it)\n"
                 f"snapshot:  curl -s {base}/dash.txt\n"
-                f"git-local: curl -s {base}/repo.bundle -o /tmp/tcj.bundle "
-                f"&& git clone /tmp/tcj.bundle ~/tcj\n"
+                f"git-local: curl -s {base}/repo.bundle -o /tmp/clique.bundle "
+                f"&& git clone /tmp/clique.bundle ~/clique\n"
             )
 
         @app.get("/dash.txt", response_class=PlainTextResponse)
@@ -662,8 +662,8 @@ class SchedulerServer:
             """Full git bundle of the server tree (history included).
 
             Lets a teammate's box become a git remote without GitHub:
-            ``curl $SERVER/repo.bundle -o /tmp/tcj.bundle &&
-            git clone /tmp/tcj.bundle ~/tcj``. Falls back to /app.tgz
+            ``curl $SERVER/repo.bundle -o /tmp/clique.bundle &&
+            git clone /tmp/clique.bundle ~/clique``. Falls back to /app.tgz
             content (snapshot, no history) when git is unavailable."""
             import subprocess as _sp
             from fastapi.responses import Response as _Response
@@ -680,7 +680,7 @@ class SchedulerServer:
                 return await app_tgz()
             return _Response(content=blob, media_type="application/octet-stream",
                              headers={"Content-Disposition":
-                                      'attachment; filename="clique-tcj.bundle"'})
+                                      'attachment; filename="clique.bundle"'})
 
         @app.get("/tui.py", response_class=PlainTextResponse)
         async def tui_py() -> str:

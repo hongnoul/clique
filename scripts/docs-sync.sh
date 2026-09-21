@@ -11,7 +11,7 @@
 #   # or full JSON: curl -s $CLIQUE_SERVER/v1/workspaces/<id>/export
 #
 # Step 2 (credentialed checkout): apply it.
-#   sh scripts/docs-sync.sh /tmp/bundle.json [--checkout ~/git/tcj] [--apply]
+#   sh scripts/docs-sync.sh /tmp/bundle.json [--checkout ~/git/clique] [--apply]
 #
 # Default is --dry-run: prints what would change. --apply writes files.
 # Commit + push + PR always stay manual (review gate for agent drafts).
@@ -27,7 +27,7 @@ for a in "$@"; do
     esac
 done
 # parse --checkout <dir> properly
-CHECKOUT_DIR="$HOME/git/tcj"
+CHECKOUT_DIR="$HOME/git/clique"
 prev=""
 for a in "$@"; do
     if [ "$prev" = "--checkout" ]; then CHECKOUT_DIR="$a"; fi

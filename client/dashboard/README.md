@@ -21,7 +21,7 @@ Two frontends over the same API (`scheduler/api/rest.py` + `/ws/events`):
 - Queue depth and wait time per task type and per cluster.
 - Click a running task to mirror its tokens (`/ws/tasks/{id}`) in the live output card.
 - Overload heatmap (task type x cluster) from `SuggestionEngine.overload_report`.
-- Suggestion cards ("node-3 could serve a code-gen model") with dismiss and a copyable `clique model swap` command.
+- Suggestion cards ("node-3 could serve a code-gen model") with dismiss and a rejoin with the suggested model.
 
 ### Chat
 `clique submit` in a browser, with sessions as the chat list:

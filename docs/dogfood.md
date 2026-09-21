@@ -6,8 +6,8 @@ GPU engine: vLLM FP8 `nemotron-3-nano-fp8` on :8000, 340+ TPS aggregate at 32-wa
 
 ## Live status (2026-09-20 03:40 ET, verified end-to-end from this Mac)
 
-- gx10 `~/tcj` is now a **real git checkout** of this branch (bundle clone,
-  prior tree kept as `~/tcj.bak-*`), so `/v1/clique` reports a true
+- gx10 `~/clique` is now a **real git checkout** of this branch (bundle clone,
+  prior tree kept as `~/clique.bak-*`), so `/v1/clique` reports a true
   `server_sha` (bb67fca). Venv rebuilt in place; note venv shebangs break
   if the tree directory is moved, rebuild `.venv` after any rename.
 - Supervision: user units `clique-server` + `clique-node` + **new
@@ -106,8 +106,8 @@ not a dependency.
   No clone, no PAT. `/repo.bundle` now serves the full history as a git bundle.
 - **Teammate dev checkout (no GitHub account needed):**
   ```bash
-  curl -s $CLIQUE_SERVER/repo.bundle -o /tmp/tcj.bundle
-  git clone /tmp/tcj.bundle ~/tcj && cd ~/tcj
+  curl -s $CLIQUE_SERVER/repo.bundle -o /tmp/clique.bundle
+  git clone /tmp/clique.bundle ~/clique && cd ~/clique
   git remote add origin-clock $CLIQUE_SERVER/repo.bundle  # refresh via re-download
   ```
 - **Going forward:** treat the gx10 checkout (or a pinned tag) as the source of

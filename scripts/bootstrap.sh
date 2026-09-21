@@ -7,13 +7,13 @@
 #   # or: CLIQUE_SERVER=http://<server-ip>:7777 sh scripts/bootstrap.sh
 #
 # GitHub fallback (server unreachable, or dev checkout with history):
-#   export CLIQUE_GITHUB_TOKEN=github_pat_...     # contents:read on hongnoul/tcj
+#   export CLIQUE_GITHUB_TOKEN=github_pat_...     # contents:read on hongnoul/clique
 #   curl -fsSL -H "Authorization: Bearer $CLIQUE_GITHUB_TOKEN" \
-#     https://raw.githubusercontent.com/hongnoul/tcj/main/scripts/bootstrap.sh | sh
+#     https://raw.githubusercontent.com/hongnoul/clique/main/scripts/bootstrap.sh | sh
 # or from a clone:  sh scripts/bootstrap.sh
 set -eu
 
-REPO_URL="https://github.com/hongnoul/tcj"
+REPO_URL="https://github.com/hongnoul/clique"
 INSTALL_DIR="${CLIQUE_HOME:-$HOME/.clique/app}"
 BIN_DIR="${CLIQUE_BIN:-$HOME/.local/bin}"
 
@@ -113,14 +113,14 @@ main() {
                 cat "$CLONE_LOG" 2>/dev/null || true
                 rm -f "$CLONE_LOG"
                 echo "" >&2
-                echo "NOTE: this repo (hongnoul/tcj) is PRIVATE." >&2
+                echo "NOTE: this repo (hongnoul/clique) is PRIVATE." >&2
                 echo "The headless machine has no GitHub credentials, so git cannot even" >&2
                 echo "ask for a username (no tty) and aborts. Fix: create a fine-grained" >&2
-                echo "PAT (github.com/settings/tokens, contents:read on hongnoul/tcj)." >&2
+                echo "PAT (github.com/settings/tokens, contents:read on hongnoul/clique)." >&2
                 echo "If you fetched this script without a token, re-fetch it WITH the token:" >&2
                 echo "  export CLIQUE_GITHUB_TOKEN=github_pat_..." >&2
                 echo "  curl -fsSL -H \"Authorization: Bearer \$CLIQUE_GITHUB_TOKEN\" \\" >&2
-                echo "    https://raw.githubusercontent.com/hongnoul/tcj/main/scripts/bootstrap.sh | sh" >&2
+                echo "    https://raw.githubusercontent.com/hongnoul/clique/main/scripts/bootstrap.sh | sh" >&2
                 echo "Or make the repo public." >&2
                 echo "" >&2
                 diag_clone_failure
@@ -286,7 +286,7 @@ fetch_tarball() {    # Fallback when git is broken/missing-ca/blocked: no git ne
     return 1
 }
 
-TARBALL_URL="https://github.com/hongnoul/tcj/archive/refs/heads/main.tar.gz"
+TARBALL_URL="https://github.com/hongnoul/clique/archive/refs/heads/main.tar.gz"
 
 log()  { printf '  \033[32m>\033[0m %s\n' "$1"; }
 warn() { printf '  \033[33m!\033[0m %s\n' "$1"; }

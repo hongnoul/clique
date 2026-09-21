@@ -1,4 +1,5 @@
 [console_scripts]
 clique = client.cli:main
 clique-agent = node.agent:main
+clique-mcp = client.mcp_server:main
 clique-server = scheduler.server:main
