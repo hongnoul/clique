@@ -1,10 +1,11 @@
-# Clique: locally shared AI models over LAN — implementation spec
+# Clique: the networked personal AI computer — implementation spec
 
 [Overview](README.md)
 
 Fully implemented. Every `.py` file in this tree contains the working
 implementation with docstring contracts; `tests/` runs a real server
-plus real agents over HTTP/WS with an echo runtime.
+plus real agents over HTTP/WS with an echo runtime. Dogfooded on a
+live ASUS Ascent GX10 server (docs/dogfood.md).
 
 ## System summary
 
@@ -40,30 +41,42 @@ flowchart TB
 
 | Path | Responsibility |
 |---|---|
-| `common/types.py` | Shared dataclasses: NodeInfo, ResourceSnapshot, ModelSpec, Task, Session, Cluster, Permission levels. |
+| `common/types.py` | Shared models: NodeInfo, ResourceSnapshot, ModelSpec, Task, CodeTaskSpec, Session, Cluster, permission levels. |
 | `common/protocol.py` | Wire message schemas and (de)serialization: register, heartbeat, assign, result, context sync. |
 | `common/config.py` | TOML config loading/validation for node and server roles. |
 | `common/errors.py` | Error taxonomy shared by all components. |
-| `node/agent.py` | Node daemon lifecycle: start, join clique, serve, drain, leave. Also hosts the executor and heartbeat loops for the MVP. |
+| `common/think.py` | Reasoning/answer splitting for think-style models (`split_think`, streaming `StreamSplitter`) feeding the OpenAI-compat endpoint. |
+| `common/tls.py` | TLS helpers. |
+| `node/agent.py` | Node daemon lifecycle: start, join clique, serve, drain, leave. Also hosts the heartbeat loop for the MVP. |
 | `node/discovery.py` | mDNS/zeroconf announce + browse; find or become server node. |
 | `node/resources.py` | Probe CPU/GPU/memory/battery/load; produce ResourceSnapshot. |
-| `node/model_runtime.py` | Adapter over llama-server/Ollama: load, unload, infer, health. |
+| `node/model_runtime.py` | Adapter over llama-server/Ollama/vLLM (openai-compat): load, unload, infer, health. |
 | `node/heartbeat.py` | Placeholder: heartbeat loop lives in `node/agent.py` for now. |
-| `node/executor.py` | Placeholder: task execution lives in `node/agent.py` for now. |
-| `scheduler/server.py` | Server-node entrypoint: compose registry, router, API, stores. |
+| `node/executor.py` | Task executor: single-shot streamed inference, plus the opt-in bounded tool loop (max 5 steps, server reverifies). |
+| `node/tools.py` | Node-local tool sandbox: JSON tool calls (read/edit/write, allowlisted test runners), no shell for the model. |
+| `scheduler/server.py` | Server-node entrypoint: compose registry, router, API, stores; serves installer, bundle, dash, chat, TUI. |
 | `scheduler/registry.py` | Node registry, cluster membership, liveness, op-order tracking. |
-| `scheduler/router.py` | Routing policy: eligibility, load/length-aware scoring, one task per node. |
+| `scheduler/router.py` | Routing policy: eligibility, load/length-aware scoring, one task per node, leases, retries, first-commit-wins. |
+| `scheduler/harness.py` | Deterministic code-edit harness: extract single diff fence, validate guards, build code prompt. |
+| `scheduler/ledger.py` | Append-only sqlite ledger: one row per terminal task, accepted-work accounting per node. |
+| `scheduler/tool_executor.py` | Server-side tool relay: executes worker-requested tool calls against server surfaces only (no shell, no network). |
 | `scheduler/context_store.py` | Shared session contexts, intra-cluster shared context. |
 | `scheduler/sessions.py` | Session lifecycle, rare cross-node session migration. |
-| `scheduler/vcs.py` | Git-backed version control of the shared server DB. |
+| `scheduler/vcs.py` | Git-backed (dulwich) version control of server state and the canonical code-repo. |
 | `scheduler/workspace.py` | Live realtime workspaces: sequenced in-memory patches, rebase, debounced git checkpoints, rehydrate. |
 | `scheduler/workspaces.py` | Ephemeral per-task CODE_EDIT checkouts: seed, apply diff, run tests. |
 | `scheduler/api/workspace_routes.py` | `/ws/workspace/{id}` realtime collab + `/v1/workspaces` REST (history, commits, flush). |
 | `scheduler/suggestions.py` | Detect overloaded task types/nodes, suggest model changes. |
-| `scheduler/api/rest.py` | HTTP API route specs. |
-| `scheduler/api/ws.py` | WebSocket event stream specs (dashboard, session watch). |
-| `client/sdk.py` | Python client for the server API (used by CLI and dashboard). |
-| `client/cli.py` | Headless CLI: join, status, submit, sessions (for GX10 etc. with no monitor). |
+| `scheduler/api/rest.py` | HTTP API: sessions, nodes, tasks, code tasks + races, vcs, ledger, suggestions, OpenAI-compat `/v1/chat/completions` + `/v1/models`, web pages. |
+| `scheduler/api/ws.py` | WebSocket event streams (dashboard, session watch, agent channel). |
+| `client/sdk.py` | Python client for the server API (used by CLI, TUI, MCP server, dashboard). |
+| `client/cli.py` | CLI: serve, join, onboard, join-remote, submit, code-submit, workspace, sessions, vcs, ledger, stats, dash, kick, mcp install/grow. |
+| `client/home.py` | Button home TUI (`clique` with no args): Host, Join, Chat, Dash over the same CLI code paths. |
+| `client/daemon.py` | Detached background process management for `clique serve`/`join` (pidfiles + logs). |
+| `client/tui.py` | Fullscreen textual dashboard (`clique dash --full`) for monitor-less nodes (GX10). |
+| `client/curl_tui.py` | Stdlib-only live TUI served at `/tui.py`; runs anywhere with python3 + curl. |
+| `client/mcp_server.py` | `clique-mcp` stdio MCP server: chat, submit, code tasks, sessions, full workspace surface. |
+| `client/mcp_install.py` | Auto-register `clique-mcp` into local harnesses (Claude Code, Codex, Cursor, Windsurf, Claude Desktop, Jcode). |
 | `client/dashboard/README.md` | Web dashboard views and route spec. |
 | `tests/README.md` | Test plan. |
 
@@ -94,7 +107,7 @@ flowchart TB
 3. **P2 Dashboard/UI** — done: `client/cli.py`, `client/dashboard/index.html` (served at `/dash`), `scheduler/api/*`, headless curl TUI.
 4. **P2 Suggestions** — done: `scheduler/suggestions.py` (overloaded clusters → suggest an idle node switch models, with hysteresis).
 5. **P3 Shared context** — done: `scheduler/context_store.py`, `scheduler/sessions.py` (intra-cluster now, inter-cluster far future).
-6. **P3 Extras** — `scheduler/vcs.py` (dulwich state-repo). Governance and cron were removed: collaborative dev env, any authenticated node may administrate.
+6. **P3 Extras** — done: `scheduler/vcs.py` (dulwich state-repo + code-repo), live workspaces (`scheduler/workspace.py`), verified code-edit loop (`scheduler/harness.py`, `scheduler/workspaces.py`), append-only ledger, MCP server + auto-install, OpenAI-compat endpoint with reasoning split. Governance and cron were removed: collaborative dev env, any authenticated node may administrate.
 
 ## Cross-cutting invariants
 

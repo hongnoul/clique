@@ -1,5 +1,9 @@
 # Dogfooding the gx10 clique server — graceful rollout plan
 
+The gx10 is an ASUS Ascent GX10 (GB10, 128GB unified memory): the
+demo-case personal AI computer. It runs the clique server, the vLLM
+engine, and its own node, all headless.
+
 Server: `http://100.83.233.124:7777` over Tailscale.
 GPU engine: vLLM FP8 `nemotron-3-nano-fp8` on :8000, 340+ TPS aggregate at 32-way batching,
 16 `parallel_slots` on the clique node.

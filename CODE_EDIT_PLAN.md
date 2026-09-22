@@ -1,7 +1,8 @@
-# Collaborative Optimized Code Edit — Plan (draft)
+# Collaborative Optimized Code Edit — verified loop
 
-Status: draft for `justin` branch. Goal: turn raw inference nodes into a
-verified direct-edit loop without trusting node output.
+Status: implemented and dogfooded (see docs/dogfood.md, gate G5).
+Raw inference nodes feed a verified direct-edit loop without trusting
+node output. This document is the design contract the code follows.
 
 ## 1. Invariant
 
@@ -152,15 +153,15 @@ path_forbidden | patch_conflict | tests_failed | timeout`. Retry per
 
 ## 9. Phases
 
-- **P0 (0.5d):** types + `extract_diff` + fixtures. Unit test only.
-- **P1 (1d):** `workspaces.py` + `harness.py` + server hook + 3 REST routes
-  + SDK/CLI. Integration: `test_code_patch_accepted`,
-  `test_code_patch_rejected`, `test_parallel_race_first_wins`.
-- **P1.5 (0.5d):** session follow-ups + dash diff preview + ledger wiring.
-- **P2 (after the verified loop is stable):** node-local loop. Move `_execute` into
-  `node/executor.py`, add `node/tools.py` (`read | edit | bash` JSON fence,
-  max 5 steps, `<done>` terminator). Server still reverifies. This is the
-  only phase that touches node trust boundary.
+- **P0 (done):** types + `extract_diff` + fixtures (`tests/test_harness.py`).
+- **P1 (done):** `workspaces.py` + `harness.py` + server hook + REST routes
+  + SDK/CLI (`clique code-submit`), plus `/v1/code/race` for parallel races.
+- **P1.5 (done):** session follow-ups + dash diff preview + ledger wiring.
+- **P2 (done):** node-local loop. `_execute` lives in `node/executor.py`,
+  `node/tools.py` provides the sandbox (`read | edit | write | bash`
+  allowlisted, max 5 steps). Opt-in per task via `--tools`. Server still
+  reverifies every diff. This is the only phase that touches the node
+  trust boundary.
 
 Explicitly rejected: node owns canonical repo. Breaks volunteer safety
 story and demo audit.

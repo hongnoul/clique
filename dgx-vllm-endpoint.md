@@ -1,5 +1,7 @@
 # GX10 high-throughput inference endpoint (2026-09-19)
 
+gx10 = ASUS Ascent GX10 (GB10 Grace Blackwell, 128GB unified memory).
+
 ## Endpoint
 - OpenAI-compatible: `http://100.83.233.124:8000/v1` (tailscale) / `http://127.0.0.1:8000/v1` (on gx10)
 - Model name: `nemotron-3-nano-fp8` (NVIDIA-Nemotron-3-Nano-30B-A3B-FP8, ModelOpt FP8)

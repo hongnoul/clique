@@ -1,40 +1,82 @@
-# clique — Idle Compute
+# clique — the personal AI computer, networked
 
-**Plug in your idle laptop and every useful task it completes is verified and credited to it in a durable ledger.**
+**Claim: personal AI computers will be mainstream.** Boxes like the ASUS
+Ascent GX10 put datacenter-class inference on a desk. clique is the
+software layer that turns one of those boxes plus the laptops around it
+into a next-generation development environment: every device is both a
+model provider and a dev seat, work is scheduled across the pool, and
+all sessions share one realtime version-controlled scope.
 
-Status: target for HackMIT 2026. This is a goal to prove, not a result already measured.
+Status: dogfooded daily on a live ASUS Ascent GX10 server (vLLM FP8
+Nemotron, 340+ TPS aggregate) plus a mixed fleet of Macs and Linux
+laptops. See [docs/dogfood.md](docs/dogfood.md) for the live rollout.
 
-Details: [Code edit plan](CODE_EDIT_PLAN.md).
+## Three killer features
 
-## The product in one paragraph
+### 1. Socket realtime version control across sessions
 
-Consumers submit batch inference jobs through one API. A scheduler places each job on idle laptops supplied by independent owners. Results return through the same API like any other provider. The backend is consumer hardware, not a datacenter.
+Live workspaces are the clique's internal VCS: the server sequences
+every patch over websockets, concurrent writers are rebased instead of
+rejected, and debounced git checkpoints make history durable. Memory is
+truth for seconds, git is truth for hours. Any number of humans and
+agents, in any session, on any machine, edit the same live files and see
+each other's writes in under a second. Details:
+[docs/live-workspaces.md](docs/live-workspaces.md).
 
-Demand is batch code work that is easy to verify with tests. Supply is existing laptops. The interface is OpenAI compatible plus durable async jobs.
+### 2. Scheduler: verified work across the pool
 
-## Why this is worth building
+A durable sqlite-backed queue routes each task to the best idle node:
+busyness- and size-aware scoring (longer prompts go to bigger models),
+one task per node, leases that expire and retry on node loss, idempotent
+submits, and first-commit-wins parallel races. For code edits, a
+deterministic server-side harness extracts the model's diff, applies it
+in an ephemeral checkout, runs the tests, and only then commits and
+records the task as accepted in the ledger. Nodes are never trusted with
+the canonical repo. Details: [CODE_EDIT_PLAN.md](CODE_EDIT_PLAN.md).
 
-In 2026 there is no gap between a hackathon demo and a real system if the demo serves real jobs with real accounting. The ledger records every accepted task per node from day one, so the weekend prototype is also a working collaborative pool with honest goodput numbers.
+### 3. Open source harness integration
 
-The bet is that idle consumer hardware becomes the cheapest compliant layer for delay tolerant work. Datacenters win on single stream speed. A laptop pool wins on zero new hardware, concurrent batch throughput, and owner aligned supply.
+The clique meets existing agent tooling where it lives:
 
-## Why it is not absurdly slow
+- **OpenAI-compatible API**: `/v1/chat/completions` and `/v1/models`, so
+  any OpenAI client (jcode, opencode, Cline, plain SDKs) can point at
+  the clique as a provider, including reasoning-token splitting for
+  think-style models.
+- **MCP server**: `clique-mcp` exposes chat, code tasks, sessions, and
+  the full workspace surface (create/read/write/patch/history/flush/
+  export/task) over stdio. `clique mcp install` auto-registers it into
+  Claude Code, Codex CLI, Cursor, Windsurf, Claude Desktop, and Jcode.
+- **Server-side tool relay**: models that emit OpenAI tool calls get
+  them executed against the server's own surfaces (workspaces, sessions,
+  vcs, stats) with no shell and no network on the node.
 
-Use replica groups first. Each laptop runs a whole small model locally, so there is no per token network hop. One request runs at single laptop speed. That is slower than a datacenter but acceptable for delay tolerant code tasks that complete in seconds.
+Every agent harness on every machine reads and writes the same sequenced
+workspace state. That is the shared scope that makes a pool of personal
+AI computers feel like one machine.
 
-Pipeline sharding is a stretch path for models no single laptop can hold. It adds hop latency per token but keeps per hop payloads small and gains throughput by filling the pipe with many requests.
+## The demo: ASUS Ascent GX10 as the home server
 
-## Why more nodes is better
+One GX10 runs the clique server plus a vLLM FP8 engine
+(`nemotron-3-nano-fp8`, 16 parallel slots, 340+ TPS at 32-way batching,
+see [dgx-vllm-endpoint.md](dgx-vllm-endpoint.md)). Laptops join over
+LAN, tailnet, or a public quick tunnel with one command, contribute
+their own local models, and every accepted task lands in the ledger.
+The GX10 is headless: the CLI, stdlib TUI, and web dashboard were built
+so a monitor-less box is a first-class citizen.
 
-More warmed replicas means more concurrent jobs, lower queue delay, and higher goodput within the declared service target. Reliability also improves because a lost worker triggers a retry on another node instead of a failed job.
+## What is implemented
 
-Single request speed does not improve by adding replicas. Claim throughput and availability gains, not per token acceleration.
-
-## Starting fleet
-
-The network starts with 5 team laptops: 3 Macs plus 2 Arch or NVIDIA machines, each running one Qwen2.5-Coder-7B Q4 replica. No per token network hop. Throughput numbers below are projections to verify, not measured results.
-
-Primary model: Qwen2.5-Coder-7B-Instruct Q4, 1 node per replica, 5 replicas. Stretch: Qwen3-30B-A3B MoE Q4, DeepSeek-Coder-V2-Lite 16B, Qwen2.5-Coder-32B, Llama-3.3-70B across 2 to 4 nodes.
+mDNS discovery, signed registration (node keypair -> bearer token,
+first client node is op), heartbeats, durable sqlite queue, busyness-
+and size-aware routing, streaming results, retry on node loss,
+cancellation, idempotent submits, sessions with cluster affinity and
+migration, live workspaces (WS patch/delta/sync, rebase, git
+checkpoints), verified code-edit loop with parallel races, node-local
+bounded tool loop (server still reverifies), OpenAI-compat endpoint
+with reasoning split, MCP server + auto-install, append-only ledger,
+web dashboard at `/dash`, chat at `/chat`, curl-only snapshot at
+`/dash.txt`, stdlib TUI at `/tui.py`, self-serving installer
+(`/join.sh` + `/app.tgz` + `/repo.bundle`, no GitHub in the join path).
 
 ## Non-goal: income
 
@@ -42,35 +84,20 @@ This is a collaborative dev environment. The ledger tracks accepted
 contributions per node (accountability and goodput visibility), not
 earnings. There is no rate, payout, or settlement.
 
-## Anyone at HackMIT can join live
-
-Any hacker or judge can become a node during the demo. Open the join page, download one signed worker binary, and run it. The worker benchmarks the laptop, reports model readiness and resource limits, and advertises capacity only after loading and warmup checks pass.
-
-Each new laptop appears on the booth screen within a minute as added goodput.
-
-## What must be shown live
-
-1. Visitor submits a job and sees queue position.
-2. Multiple laptops complete independent tasks concurrently.
-3. One laptop gets busy or leaves and the scheduler adapts without duplicate committed results.
-4. A node rejoins and goodput recovers.
-5. The ledger shows accepted tasks with per laptop totals plus failures and wasted work.
-
-## Beyond the weekend
-
-Keep the durable ledger, fair queue, and recovery. Add pipeline replicas for the 30B MoE class. Add pipeline sharding toward 70B only after the 7B loop is stable.
-
 ## Repo layout
 
 ```text
 clique/
   README.md          # this file: product, quickstart
-  CODE_EDIT_PLAN.md  # verified code-edit loop plan
-  client/            # SDK, CLI, TUI, MCP server, dashboard
-  common/            # protocol, types, config, TLS
-  scheduler/         # API, router, registry, ledger, workspaces
-  node/              # agent, discovery, runtime, executor
+  SPEC.md            # implementation spec and file map
+  CODE_EDIT_PLAN.md  # verified code-edit loop
+  client/            # SDK, CLI, home TUI, MCP server, dashboard
+  common/            # protocol, types, config, think-split, TLS
+  scheduler/         # API, router, registry, ledger, harness, workspaces
+  node/              # agent, discovery, runtime, executor, tool sandbox
   docs/              # dogfood, MCP, live workspaces
+  deploy/            # public tunnel setup
+  scripts/           # bootstrap, sweeps, docs-sync, vllm bench
 ```
 
 ## Getting started
@@ -85,7 +112,7 @@ uv venv && uv pip install -e .          # or: pip install -e .
 clique                                  # button home: Host Join Chat Dashboard
 ```
 
-## MVP quickstart
+## Quickstart
 
 ```bash
 uv venv && uv pip install -e .          # or: pip install -e .
@@ -99,7 +126,7 @@ clique                                  # Host Join Chat Dashboard
 clique serve --foreground
 
 # terminal 2+: join devices. Echo runtime needs no model;
-# point --runtime openai-compat at ollama/llama-server for real inference.
+# point --runtime openai-compat at ollama/llama-server/vllm for real inference.
 clique join --runtime echo --param-b 7 --name my-laptop
 clique join --runtime openai-compat --model-name qwen2.5-coder:7b --param-b 7
 
@@ -107,6 +134,8 @@ clique join --runtime openai-compat --model-name qwen2.5-coder:7b --param-b 7
 clique help                             # what every command does
 clique nodes
 clique submit "write a fizzbuzz in rust"
+clique code-submit -p "fix the bug" -f main.py=./main.py --tools
+clique workspace --create --files '{"main.py": "x = 1\n"}'
 clique stats
 clique dash --server http://<server-ip>:7777   # terminal dashboard + web link
 ```
@@ -173,13 +202,6 @@ snapshot in a loop, leaves on `q`, and prints the web dashboard link
 (`<server>/dash`, or the public https URL when a tunnel is up, so a
 phone can open it too); `clique dash --full` opens the fullscreen
 textual dashboard.
-
-Implemented: mDNS discovery, signed registration (first client node is op),
-heartbeats, durable sqlite queue, busyness- and size-aware routing (longer
-prompts to bigger models, one task per node), streaming results, retry on
-node loss, cancellation, idempotent submits, CLI, sessions, live
-workspaces, MCP server, dashboard. See CODE_EDIT_PLAN.md for the
-verified code-edit loop and docs/ for the dogfood guides.
 
 ### Joining on enterprise Wi-Fi (eduroam, MIT SECURE, etc.)
 
